@@ -1,0 +1,63 @@
+name: Scrape and Commit CSV
+
+on:
+  schedule:
+    - cron: '0 */2 * * *' # Запуск кожні 2 години (00:00, 02:00, 04:00, ..., 22:00 UTC)
+  workflow_dispatch: # Дозволяє запускати вручну через GitHub UI
+  push:
+    branches:
+      - main # Запуск при пуші в гілку main
+
+jobs:
+  scrape-and-commit:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Крок 1: Клонуємо репозиторій
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Отримуємо повну історію, щоб уникнути проблем із гітом
+
+      # Крок 2: Оновлюємо репозиторій до останньої версії
+      - name: Pull latest changes
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git pull --rebase origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Крок 3: Налаштування Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Використовуємо Python 3.10 (можете змінити версію)
+
+      # Крок 4: Встановлення залежностей
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      # Крок 5: Запуск скрипта main.py
+      - name: Run scrape script
+        run: python main.py
+
+      # Крок 6: Перевірка змін у output.csv
+      - name: Check for changes
+        id: check_changes
+        run: |
+          git diff --exit-code output.csv || echo "changes=true" >> $GITHUB_OUTPUT
+
+      # Крок 7: Коміт і пуш змін у output.csv
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.changes == 'true'
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git add output.csv
+          git commit -m "Update output.csv with latest scrape data"
+          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
