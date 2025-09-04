@@ -40,17 +40,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Крок 5: Запуск скрипта main.py
+      # Крок 5: Запуск скрипта api_parser.py
       - name: Run scrape script
         run: python api_parser.py
 
-      # Крок 6: Перевірка змін у output.csv
+      # Крок 6: Перевірка вмісту директорії
+      - name: List directory contents
+        run: ls -la
+
+      # Крок 7: Виведення вмісту output.csv (якщо файл існує)
+      - name: Show output.csv contents
+        run: |
+          if [ -f output.csv ]; then
+            echo "Вміст output.csv:"
+            cat output.csv
+          else
+            echo "Файл output.csv не знайдено"
+          fi
+
+      # Крок 8: Перевірка змін у output.csv
       - name: Check for changes
         id: check_changes
         run: |
           git diff --exit-code output.csv || echo "changes=true" >> $GITHUB_OUTPUT
 
-      # Крок 7: Коміт і пуш змін у output.csv
+      # Крок 9: Коміт і пуш змін у output.csv
       - name: Commit and push changes
         if: steps.check_changes.outputs.changes == 'true'
         run: |

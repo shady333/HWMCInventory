@@ -25,10 +25,13 @@ def fetch_data_from_api():
         "ts=1756990390440"
     )
     try:
+        print("Виконуємо запит до API...")
         response = requests.get(api_url, timeout=10)
         response.raise_for_status()  # Перевіряємо, чи запит успішний
         data = response.json()
-        return data.get('results', [])
+        results = data.get('results', [])
+        print(f"Отримано {len(results)} результатів із API")
+        return results
     except (requests.RequestException, ValueError) as e:
         print(f"Помилка при отриманні даних з API: {e}")
         return []
@@ -48,12 +51,17 @@ def process_api_results(results):
                 'image_url': remove_url_params(item.get('imageUrl', '')),
                 'price': item.get('price', '')
             }
+            print(f"Оброблено елемент: {data}")
             data_list.append(data)
+        else:
+            print(f"Пропущено елемент: tags_category != ['Vehicles'], item={item.get('name', 'Unknown')}")
+    print(f"Загалом оброблено {len(data_list)} елементів із tags_category: ['Vehicles']")
     return data_list
 
 # Функція для оновлення або додавання даних у CSV
 def update_csv(data, csv_file='output.csv'):
     if not data or data['current_qty'] is None:
+        print(f"Пропущено запис для {data.get('car_name', 'Unknown')}: current_qty is None")
         return
 
     # Визначаємо поля CSV
@@ -99,10 +107,12 @@ def update_csv(data, csv_file='output.csv'):
 
     # Записуємо оновлені дані у CSV
     try:
+        print(f"Записуємо {len(rows)} рядків у {csv_file}")
         with open(csv_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
+        print(f"Успішно записано в {csv_file}")
     except IOError as e:
         print(f"Помилка запису в CSV-файл {csv_file}: {e}")
 
