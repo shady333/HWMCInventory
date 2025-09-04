@@ -63,21 +63,13 @@ jobs:
         run: |
           git status
 
-      # Крок 9: Перевірка змін у output.csv
-      - name: Check for changes
-        id: check_changes
-        run: |
-          git add output.csv  # Додаємо новий або змінений файл до індексу
-          git diff --exit-code output.csv || echo "changes=true" >> $GITHUB_OUTPUT
-
-      # Крок 10: Коміт і пуш змін у output.csv
+      # Крок 9: Коміт і пуш змін у output.csv (без перевірки змін)
       - name: Commit and push changes
-        if: steps.check_changes.outputs.changes == 'true'
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          git add output.csv  # Переконуємося, що файл додано до індексу
-          git commit -m "Update output.csv with latest scrape data"
+          git add output.csv
+          git commit -m "Update output.csv with latest scrape data" || echo "No changes to commit"
           git push origin main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
