@@ -51,6 +51,13 @@ def process_api_results(results):
                 'image_url': remove_url_params(item.get('imageUrl', '')),
                 'price': item.get('price', '')
             }
+            # Перевіряємо і конвертуємо current_qty
+            if data['current_qty'] is not None:
+                try:
+                    data['current_qty'] = int(data['current_qty'])
+                except (ValueError, TypeError):
+                    print(f"Невалідне значення ss_inventory_count для {data['car_name']}: {data['current_qty']}, встановлено None")
+                    data['current_qty'] = None
             print(f"Оброблено елемент: {data}")
             data_list.append(data)
         else:
@@ -105,31 +112,41 @@ def update_csv(data, csv_file='output.csv'):
             'price': data['price']
         })
 
-    # Записуємо оновлені дані у CSV
+    # Записуємо оновлені дані у CSV, навіть якщо порожньо
     try:
         print(f"Записуємо {len(rows)} рядків у {csv_file}")
         with open(csv_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(rows)
+            if rows:  # Записуємо лише якщо є рядки
+                writer.writerows(rows)
+            else:
+                print(f"Немає даних для запису, створюємо порожній CSV із заголовком")
+                writer.writerow({field: '' for field in fieldnames})  # Створюємо файл із заголовком
         print(f"Успішно записано в {csv_file}")
     except IOError as e:
         print(f"Помилка запису в CSV-файл {csv_file}: {e}")
 
-# Функція для обробки всіх даних
+# Функція для обробки всіх даних із захистом від винятків
 def process_data():
-    # Отримуємо дані з API
-    results = fetch_data_from_api()
-    if not results:
-        print("Не отримано даних з API")
-        return
+    try:
+        # Отримуємо дані з API
+        results = fetch_data_from_api()
+        if not results:
+            print("Не отримано даних з API, створюємо порожній CSV")
+            # Створюємо порожній CSV із заголовком, якщо немає даних
+            update_csv({'car_name': '', 'SKU': '', 'page_name': '', 'current_qty': None, 'image_url': '', 'price': ''})
+            return
 
-    # Обробляємо результати API
-    data_list = process_api_results(results)
+        # Обробляємо результати API
+        data_list = process_api_results(results)
 
-    # Оновлюємо CSV для кожного елемента
-    for data in data_list:
-        update_csv(data)
+        # Оновлюємо CSV для кожного елемента
+        for data in data_list:
+            update_csv(data)
+    except Exception as e:
+        print(f"Виникла помилка під час обробки даних: {e}")
+        raise  # Повторно викликаємо виняток, щоб GitHub Actions зафіксував його
 
 # Основна точка входу
 if __name__ == "__main__":
