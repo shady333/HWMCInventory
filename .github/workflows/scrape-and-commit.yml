@@ -68,10 +68,10 @@ jobs:
       - name: Commit and push changes
         if: steps.check_changes.outputs.changes == 'true'
         run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.email "action@github.com"
-          git add output.csv
-          git commit -m "Update output.csv with latest scrape data"
-          git push origin main
+          git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            git add output.csv
+            git commit -m "Update output.csv with latest scrape data" || echo "No changes to commit"
+            git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
