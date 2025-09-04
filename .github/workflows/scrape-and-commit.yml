@@ -42,7 +42,7 @@ jobs:
 
       # Крок 5: Запуск скрипта main.py
       - name: Run scrape script
-        run: python main.py
+        run: python api_parser.py
 
       # Крок 6: Перевірка змін у output.csv
       - name: Check for changes
