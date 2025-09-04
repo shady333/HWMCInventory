@@ -2,6 +2,7 @@ import requests
 import csv
 import os
 import json
+import time
 from urllib.parse import urlparse, urljoin
 
 # Функція для видалення параметрів із URL
@@ -22,10 +23,10 @@ def fetch_data_from_api():
         "domain=%2Fcollections%2Fhot-wheels-collectors%3F&resultsFormat=native&"
         "resultsPerPage=99&filter.ss_availability_filter=Available%20Now&"
         "bgfilter.ss_is_past_project=false&bgfilter.collection_handle=hot-wheels-collectors&"
-        "ts=1756990390440"
+        f"ts={int(time.time() * 1000)}"  # Динамічний таймстемп для актуальних даних
     )
     try:
-        print("Виконуємо запит до API...")
+        print(f"Виконуємо запит до API з URL: {api_url}")
         response = requests.get(api_url, timeout=10)
         response.raise_for_status()  # Перевіряємо, чи запит успішний
         data = response.json()
@@ -54,7 +55,7 @@ def process_api_results(results):
             # Перевіряємо і конвертуємо current_qty
             if data['current_qty'] is not None:
                 try:
-                    data['current_qty'] = int(data['current_qty'])
+                    data['current_qty'] = int(float(data['current_qty']))  # Дозволяє конвертацію з рядків типу "123.0"
                 except (ValueError, TypeError):
                     print(f"Невалідне значення ss_inventory_count для {data['car_name']}: {data['current_qty']}, встановлено None")
                     data['current_qty'] = None
@@ -89,6 +90,7 @@ def update_csv(data, csv_file='output.csv'):
                     if (row['page_name'] == data['page_name'] and
                         row['car_name'] == data['car_name'] and
                         row['SKU'] == data['SKU']):
+                        print(f"Знайдено збіг для {data['car_name']}, оновлюємо current_qty з {row['current_qty']} на {data['current_qty']}")
                         row['current_qty'] = str(data['current_qty'])
                         # Зберігаємо попередні значення image_url і price, якщо вони є
                         row['image_url'] = row['image_url'] if row['image_url'] else data['image_url']
@@ -102,6 +104,7 @@ def update_csv(data, csv_file='output.csv'):
 
     # Додаємо новий рядок, якщо не було оновлення
     if not updated:
+        print(f"Додано новий рядок для {data['car_name']}")
         rows.append({
             'car_name': data['car_name'],
             'SKU': data['SKU'],
@@ -112,17 +115,13 @@ def update_csv(data, csv_file='output.csv'):
             'price': data['price']
         })
 
-    # Записуємо оновлені дані у CSV, навіть якщо порожньо
+    # Записуємо оновлені дані у CSV
     try:
         print(f"Записуємо {len(rows)} рядків у {csv_file}")
         with open(csv_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            if rows:  # Записуємо лише якщо є рядки
-                writer.writerows(rows)
-            else:
-                print(f"Немає даних для запису, створюємо порожній CSV із заголовком")
-                writer.writerow({field: '' for field in fieldnames})  # Створюємо файл із заголовком
+            writer.writerows(rows)
         print(f"Успішно записано в {csv_file}")
     except IOError as e:
         print(f"Помилка запису в CSV-файл {csv_file}: {e}")
