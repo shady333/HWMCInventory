@@ -21,8 +21,8 @@ def fetch_data_from_api():
     api_url = (
         "https://mattel-creations-searchspring-proxy.netlify.app/api/search?"
         "domain=%2Fcollections%2Fhot-wheels-collectors%3F&resultsFormat=native&"
-        "resultsPerPage=99&filter.ss_availability_filter=Available%20Now&"
-        "bgfilter.ss_is_past_project=false&bgfilter.collection_handle=hot-wheels-collectors&"
+        "resultsPerPage=999&"
+        "bgfilter.collection_handle=hot-wheels-collectors&"
         f"ts={int(time.time() * 1000)}"  # Динамічний таймстемп для актуальних даних
     )
     try:
