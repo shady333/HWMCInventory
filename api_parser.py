@@ -18,31 +18,57 @@ def remove_url_params(url):
 
 # Функція для отримання даних із API
 def fetch_data_from_api(collection_name):
-    itemsArray = collection_name.split('|');
+    itemsArray = collection_name.split('|')
     collection = itemsArray[0]
     handle = itemsArray[1]
-    api_url = (
-        "https://mattel-creations-searchspring-proxy.netlify.app/api/search?"
-        "domain=%2Fcollections%2F"
-        f"{collection}&"
-        "bgfilter.collection_handle="
-        f"{handle}&"
-        "resultsFormat=native&"
-        "resultsPerPage=999&"
-        "bgfilter.ss_is_past_project=false&"
-        f"ts={int(time.time() * 1000)}"  # Динамічний таймстемп для актуальних даних
-    )
-    try:
-        print(f"Виконуємо запит до API з URL: {api_url}")
-        response = requests.get(api_url, timeout=10)
-        response.raise_for_status()  # Перевіряємо, чи запит успішний
-        data = response.json()
-        results = data.get('results', [])
-        print(f"Отримано {len(results)} результатів із API")
-        return results
-    except (requests.RequestException, ValueError) as e:
-        print(f"Помилка при отриманні даних з API: {e}")
-        return []
+
+    # Initialize the list to store all results
+    all_results = []
+
+    # Start with page 1
+    current_page = 1
+    total_pages = 1  # Will be updated after the first request
+
+    while current_page <= total_pages:
+        api_url = (
+            "https://mattel-creations-searchspring-proxy.netlify.app/api/search?"
+            "domain=%2Fcollections%2F"
+            f"{collection}&"
+            "bgfilter.collection_handle="
+            f"{handle}&"
+            "resultsFormat=native&"
+            "resultsPerPage=999&"
+            f"page={current_page}&"
+            "bgfilter.ss_is_past_project=false&"
+            f"ts={int(time.time() * 1000)}"  # Dynamic timestamp
+        )
+
+        try:
+            print(f"Fetching page {current_page} of {total_pages} from API: {api_url}")
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()  # Raise an exception for bad status codes
+            data = response.json()
+
+            # Append results from the current page
+            results = data.get('results', [])
+            all_results.extend(results)
+            print(f"Received {len(results)} results from page {current_page}")
+
+            # Update total_pages from the pagination data
+            pagination = data.get('pagination', {})
+            total_pages = pagination.get('totalPages', 1)
+            print(f"Total pages: {total_pages}")
+
+            # Move to the next page
+            current_page += 1
+
+        except (requests.RequestException, ValueError) as e:
+            print(f"Error fetching data from API for page {current_page}: {e}")
+            # Optionally, continue to the next page or break based on your needs
+            break
+
+    print(f"Total results collected: {len(all_results)}")
+    return all_results
 
 # Функція для обробки даних із API
 def process_api_results(results):
