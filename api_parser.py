@@ -189,6 +189,7 @@ def process_data(collection_name):
 if __name__ == "__main__":
     collections = ['hot-wheels-collectors|hot-wheels-collectors',
                    'hot-wheels-collectors|hot-wheels-f1-collector-vehicles',
-                   'matchbox-collectors|matchbox-collectors']
+                   'matchbox-collectors|matchbox-collectors',
+                   'mattel-creations|mattel-creations']
     for item in collections:
         process_data(item)
