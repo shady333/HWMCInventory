@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Track Hot Wheels inventory for Mattel Creations. Updated with real-time stock data.">
+    <meta name="keywords" content="Hot Wheels, Mattel Creations, inventory, collectibles, toy cars, stock tracker">
+    <meta name="author" content="YourName">
+    <meta name="robots" content="index, follow">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Hot Wheels Inventory Tracker">
+    <meta property="og:description" content="Check the latest Hot Wheels Mattel Creations inventory.">
+    <meta property="og:image" content="https://raw.githubusercontent.com/your-repo/main/hw_inventory.jpg">
+    <meta property="og:url" content="https://your-google-site-url">
+    <meta property="og:type" content="website">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Hot Wheels Inventory Tracker">
+    <meta name="twitter:description" content="Check the latest Hot Wheels Mattel Creations inventory.">
+    <meta name="twitter:image" content="https://raw.githubusercontent.com/your-repo/main/hw_inventory.jpg">
+
+    <title>Hot Wheels Inventory | Залишки ХотВілс</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        h2 {
+            color: #444;
+            margin-top: 30px;
+            border-bottom: 2px solid #007BFF;
+            Papaer-bottom: 5px;
+        }
+        h3.series-header {
+            color: #333;
+            margin-top: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            font-size: 18px;
+        }
+        h3.series-header::before {
+            content: '▶';
+            display: inline-block;
+            margin-right: 10px;
+            transition: transform 0.3s;
+        }
+        h3.series-header.expanded::before {
+            content: '▼';
+        }
+        .table-container {
+            max-height: 768px;
+            overflow-y: auto;
+            overflow-x: auto;
+            margin-bottom: 20px;
+            position: relative;
+            display: none;
+        }
+        .table-container.expanded {
+            display: block;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background-color: #fff;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        thead th {
+            position: sticky;
+            top: 0;
+            background-color: #007BFF;
+            color: white;
+            z-index: 10;
+            white-space: nowrap;
+        }
+        th:first-child, td:first-child {
+            width: 100px;
+            text-align: center;
+        }
+        th:nth-child(3), td:nth-child(3) {
+            width: 100px;
+        }
+        th:nth-child(4), td:nth-child(4) {
+            width: 100px;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+        #last-updated {
+            text-align: center;
+            font-style: italic;
+            color: #555;
+            margin-bottom: 20px;
+        }
+        .error {
+            color: red;
+            text-align: center;
+        }
+        .zero-or-soldout {
+            background-color: #ffcccc;
+            color: #333;
+        }
+        .low-stock {
+            background-color: #ffe6cc;
+            color: #333;
+        }
+        .car-image {
+            width: 100px;
+            height: 100px;
+            object-fit: cover;
+            display: block;
+            margin: auto;
+        }
+        .car-name a {
+            color: #007BFF;
+            text-decoration: none;
+        }
+        .car-name a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <h1>Hot Wheels Inventory Tracker 2025</h1>
+    <h2>Latest Stock Updates for Hot Wheels Collectors</h2>
+
+    <button id="low-stock-modal-btn" style="display: block; margin: 10px auto; padding: 10px 20px; background-color: #007BFF; color: white; border: none; border-radius: 5px; cursor: pointer;">View Low Stock Items (< 100)</button>
+
+    <div id="low-stock-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100;">
+        <div style="background: white; width: 80%; max-width: 600px; margin: 100px auto; padding: 20px; border-radius: 8px; position: relative;">
+            <button id="close-modal" style="position: absolute; top: 10px; right: 10px; background: #ff0000; color: white; border: none; border-radius: 5px; padding: 5px 10px; cursor: pointer;">Close</button>
+            <h3>Low Stock Items (Less than 100)</h3>
+            <div id="modal-content" style="max-height: 400px; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <div id="last-updated"></div>
+    <div id="tables-container"></div>
+
+    <script>
+        function createLowStockModal(data) {
+            const modal = document.getElementById('low-stock-modal');
+            const modalContent = document.getElementById('modal-content');
+            const openBtn = document.getElementById('low-stock-modal-btn');
+            const closeBtn = document.getElementById('close-modal');
+
+            const lowStockItems = data.filter(item => {
+                const qty = parseInt(item.current_qty) || 0;
+                return qty > 0 && qty < 100;
+            }).sort((a, b) => parseInt(a.current_qty) - parseInt(b.current_qty));
+
+            if (lowStockItems.length === 0) {
+                modalContent.innerHTML = '<p>No items with stock between 1 and 99.</p>';
+            } else {
+                const ul = document.createElement('ul');
+                ul.style.listStyle = 'none';
+                ul.style.padding = '0';
+
+                lowStockItems.forEach(item => {
+                    const li = document.createElement('li');
+                    li.style.padding = '10px';
+                    li.style.borderBottom = '1px solid #ddd';
+                    const pageUrl = `https://creations.mattel.com/products/${item.page_name}`;
+                    li.innerHTML = `
+                        <strong>${item.car_name}</strong> (Stock: ${item.current_qty})
+                        <a href="${pageUrl}" target="_blank" style="margin-left: 10px; color: #007BFF;">View</a>
+                    `;
+                    ul.appendChild(li);
+                });
+                modalContent.appendChild(ul);
+            }
+
+            openBtn.addEventListener('click', () => {
+                modal.style.display = 'block';
+            });
+
+            closeBtn.addEventListener('click', () => {
+                modal.style.display = 'none';
+            });
+
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.style.display = 'none';
+                }
+            });
+        }
+
+        async function fetchInventoryData() {
+            try {
+                const response = await fetch('https://raw.githubusercontent.com/shady333/HWMCInventory/main/output.csv');
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch inventory data: ${response.status} ${response.statusText}`);
+                }
+                // Отримуємо raw URL для CSV
+                const rawUrl = response.url.replace('/blob/', '/raw/');
+                const csvResponse = await fetch(rawUrl);
+                if (!csvResponse.ok) {
+                    throw new Error(`Failed to fetch raw CSV: ${csvResponse.status} ${csvResponse.statusText}`);
+                }
+                const csvText = await csvResponse.text();
+                const lines = csvText.split('\n').filter(line => line.trim());
+                const headers = lines[0].split(',').map(header => header.trim());
+                const data = lines.slice(1).map(line => {
+                    const values = line.split(',').map(value => value.trim());
+                    return headers.reduce((obj, header, index) => {
+                        obj[header.toLowerCase()] = values[index] || '';
+                        return obj;
+                    }, {});
+                }).filter(item => item.car_name && item.page_name); // Фільтруємо порожні рядки
+                return data;
+            } catch (error) {
+                document.getElementById('tables-container').innerHTML = `<p class="error">Error: ${error.message}</p>`;
+                return [];
+            }
+        }
+
+        function highlightRows() {
+            const tables = document.querySelectorAll("table");
+            tables.forEach(table => {
+                const rows = table.querySelectorAll("tbody tr");
+                rows.forEach(row => {
+                    const currentQtyCell = row.cells[3]; // Current Qty в 4-му стовпці (індекс 3)
+                    if (!currentQtyCell) return;
+
+                    const qty = parseInt(currentQtyCell.textContent.trim()) || 0;
+                    row.classList.remove("zero-or-soldout", "low-stock");
+
+                    if (qty <= 0) {
+                        row.classList.add("zero-or-soldout");
+                    } else if (qty < 100) {
+                        row.classList.add("low-stock");
+                    }
+                });
+            });
+        }
+
+        function createTables(data) {
+    const lastUpdatedDiv = document.getElementById('last-updated');
+    const tablesContainer = document.getElementById('tables-container');
+    tablesContainer.innerHTML = '';
+
+    // Групуємо за категоріями
+    const inStock = {};
+    const soldOut = {};
+
+    data.forEach(item => {
+        const qty = parseInt(item.current_qty) || 0;
+        // Визначаємо категорію
+        let category;
+        if (item.car_name.toLowerCase().includes('rlc')) {
+            category = 'RLC';
+        } else if (item.car_name.toLowerCase().includes('elite 64')) {
+            category = 'Elite 64';
+        } else if (item.car_name.toLowerCase().includes('matchbox')) {
+            category = 'Matchbox'
+        } else {
+            category = 'Hot Wheels';
+        }
+        if (qty <= 0) {
+            if (!soldOut[category]) soldOut[category] = [];
+            soldOut[category].push(item);
+        } else {
+            if (!inStock[category]) inStock[category] = [];
+            inStock[category].push(item);
+        }
+    });
+
+    function createSeriesTables(groups, headerText, container) {
+        if (Object.keys(groups).length > 0) {
+            const header = document.createElement('h2');
+            header.textContent = headerText;
+            container.appendChild(header);
+
+            Object.keys(groups).forEach(category => {
+                const seriesHeader = document.createElement('h3');
+                seriesHeader.className = 'series-header';
+                seriesHeader.textContent = category;
+                container.appendChild(seriesHeader);
+
+                const tableContainer = document.createElement('div');
+                tableContainer.className = 'table-container';
+
+                const table = document.createElement('table');
+                const thead = document.createElement('thead');
+                const tbody = document.createElement('tbody');
+
+                const headerRow = document.createElement('tr');
+                ['Image', 'Car Name', 'Current Qty', 'Max Qty'].forEach(header => {
+                    const th = document.createElement('th');
+                    th.textContent = header;
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+
+                const sortedItems = groups[category].sort((a, b) => parseInt(a.current_qty) - parseInt(b.current_qty) || 0);
+
+                sortedItems.forEach(item => {
+                    const row = document.createElement('tr');
+                    const pageUrl = `https://creations.mattel.com/products/${item.page_name}`;
+
+                    const imageCell = document.createElement('td');
+                    const img = document.createElement('img');
+                    img.src = item.image_url;
+                    img.alt = item.car_name;
+                    img.className = 'car-image';
+                    imageCell.appendChild(img);
+                    row.appendChild(imageCell);
+
+                    const nameCell = document.createElement('td');
+                    nameCell.className = 'car-name';
+                    const nameLink = document.createElement('a');
+                    nameLink.href = pageUrl;
+                    nameLink.textContent = item.car_name;
+                    nameLink.target = '_blank';
+                    nameCell.appendChild(nameLink);
+                    row.appendChild(nameCell);
+
+                    row.appendChild(document.createElement('td')).textContent = item.current_qty;
+                    row.appendChild(document.createElement('td')).textContent = item.max_qty;
+
+                    tbody.appendChild(row);
+                });
+
+                table.appendChild(thead);
+                table.appendChild(tbody);
+                tableContainer.appendChild(table);
+                container.appendChild(tableContainer);
+
+                seriesHeader.addEventListener('click', () => {
+                    const isExpanded = tableContainer.classList.contains('expanded');
+                    tableContainer.classList.toggle('expanded', !isExpanded);
+                    seriesHeader.classList.toggle('expanded', !isExpanded);
+                });
+            });
+        }
+    }
+
+    createSeriesTables(inStock, 'In Stock', tablesContainer);
+    createSeriesTables(soldOut, 'Sold Out', tablesContainer);
+
+    const lastUpdated = new Date().toLocaleString('en-GB', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZoneName: 'short'
+    }).replace(',', '').replace(/(\d+)\/(\d+)\/(\d+)/, '$1.$2.$3');
+    lastUpdatedDiv.textContent = `Last updated: ${lastUpdated}`;
+
+    setTimeout(highlightRows, 0);
+}
+
+        fetchInventoryData().then(data => {
+            if (data.length > 0) {
+                createTables(data);
+                createLowStockModal(data);
+            }
+        });
+    </script>
+</body>
+</html>
