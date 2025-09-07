@@ -17,12 +17,19 @@ def remove_url_params(url):
         return ''
 
 # Функція для отримання даних із API
-def fetch_data_from_api():
+def fetch_data_from_api(collection_name):
+    itemsArray = collection_name.split('|');
+    collection = itemsArray[0]
+    handle = itemsArray[1]
     api_url = (
         "https://mattel-creations-searchspring-proxy.netlify.app/api/search?"
-        "domain=%2Fcollections%2Fhot-wheels-collectors%3F&resultsFormat=native&"
+        "domain=%2Fcollections%2F"
+        f"{collection}&"
+        "bgfilter.collection_handle="
+        f"{handle}&"
+        "resultsFormat=native&"
         "resultsPerPage=999&"
-        "bgfilter.collection_handle=hot-wheels-collectors&"
+        "bgfilter.ss_is_past_project=false&"
         f"ts={int(time.time() * 1000)}"  # Динамічний таймстемп для актуальних даних
     )
     try:
@@ -72,6 +79,9 @@ def update_csv(data, csv_file='output.csv'):
         print(f"Пропущено запис для {data.get('car_name', 'Unknown')}: current_qty is None")
         return
 
+    if 'F1' in data['car_name']:
+        print("")
+
     # Визначаємо поля CSV
     fieldnames = ['car_name', 'SKU', 'page_name', 'max_qty', 'current_qty', 'image_url', 'price']
     rows = []
@@ -87,6 +97,8 @@ def update_csv(data, csv_file='output.csv'):
                     # Додаємо відсутні поля зі значенням за замовчуванням
                     row = {field: row.get(field, '') for field in fieldnames}
                     # Перевіряємо, чи є збіг за page_name, car_name і SKU
+
+
                     if (row['page_name'] == data['page_name'] and
                         row['car_name'] == data['car_name'] and
                         row['SKU'] == data['SKU']):
@@ -127,10 +139,10 @@ def update_csv(data, csv_file='output.csv'):
         print(f"Помилка запису в CSV-файл {csv_file}: {e}")
 
 # Функція для обробки всіх даних із захистом від винятків
-def process_data():
+def process_data(collection_name):
     try:
         # Отримуємо дані з API
-        results = fetch_data_from_api()
+        results = fetch_data_from_api(collection_name)
         if not results:
             print("Не отримано даних з API, створюємо порожній CSV")
             # Створюємо порожній CSV із заголовком, якщо немає даних
@@ -149,4 +161,8 @@ def process_data():
 
 # Основна точка входу
 if __name__ == "__main__":
-    process_data()
+    collections = ['hot-wheels-collectors|hot-wheels-collectors',
+                   'hot-wheels-collectors|hot-wheels-f1-collector-vehicles',
+                   'matchbox-collectors|matchbox-collectors']
+    for item in collections:
+        process_data(item)
