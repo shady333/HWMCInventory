@@ -2,14 +2,15 @@ name: Scrape and Commit CSV
 
 on:
   schedule:
-    # Regular schedule: every 2 hours, except during release times on Tuesdays/Thursdays
-    - cron: '0 */2 * * 0,1,3,5,6' # Every 2 hours on Sun, Mon, Wed, Fri, Sat (non-release days)
-    - cron: '0 */2 * * 2,4'       # Every 2 hours on Tue, Thu (includes 16:00 UTC = 9:00 AM PT in PDT)
-    # Release-specific runs on Tuesdays and Thursdays (PDT, UTC-7)
-    - cron: '2 16 * * 2,4'        # 9:02 AM PT (16:02 UTC) on Tue, Thu
-    - cron: '5 16 * * 2,4'        # 9:05 AM PT (16:05 UTC) on Tue, Thu
-    - cron: '10 16 * * 2,4'       # 9:10 AM PT (16:10 UTC) on Tue, Thu
-    - cron: '30 16 * * 2,4'       # 9:30 AM PT (16:30 UTC) on Tue, Thu
+    # Every 2 hours on Sun, Mon, Wed, Fri, Sat (non-release days)
+    - cron: '0 */2 * * 0,1,3,5,6'
+    # Every 2 hours on Tue, Thu, excluding 16:00-16:30 UTC
+    - cron: '0 */2 * * 2,4' # This will run at 0, 2, 4, 6, 8, 10, 12, 14, 18, 20, 22 UTC
+    # Release-specific runs on Tuesdays and Thursdays (UTC)
+    - cron: '2 16 * * 2,4'  # 16:02 UTC
+    - cron: '5 16 * * 2,4'  # 16:05 UTC
+    - cron: '10 16 * * 2,4' # 16:10 UTC
+    - cron: '30 16 * * 2,4' # 16:30 UTC
   workflow_dispatch: # Дозволяє запускати вручну через GitHub UI
   push:
     branches:
