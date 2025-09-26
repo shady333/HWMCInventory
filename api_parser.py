@@ -75,7 +75,7 @@ def process_api_results(results):
     data_list = []
     for item in results:
         # Фільтруємо тільки елементи з tags_category: ["Vehicles"]
-        if item.get('tags_category') == ['Vehicles']:
+        if item.get('tags_category') == ['Vehicles'] or item.get('tags_category') == ['Action Figures']:
             page_name = item.get('url', '').split('/')[-1]  # Витягуємо page_name з url
             data = {
                 'car_name': item.get('name', ''),
