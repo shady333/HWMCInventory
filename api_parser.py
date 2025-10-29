@@ -206,9 +206,10 @@ def process_data(collection_name):
 
 
 def get_token_with_playwright():
+    browser = None
     try:
         with sync_playwright() as p:
-            # Запускаємо Chromium у headless-режимі з CI-аргументами
+            print("Запуск Chromium...")
             browser = p.chromium.launch(
                 headless=True,
                 args=[
@@ -217,41 +218,34 @@ def get_token_with_playwright():
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
                     '--window-size=1920,1080',
-                    '--disable-features=IsolateOrigins,site-per-process',
                     '--disable-blink-features=AutomationControlled'
                 ]
             )
 
-            # Імітуємо реальний браузер
             context = browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-                java_script_enabled=True,
                 bypass_csp=True
             )
 
-            # Видаляємо ознаки автоматизації
+            # Приховуємо автоматизацію
             context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                window.chrome = { runtime: {} };
+                window.chrome = { runtime: {}, app: {}, loadTimes: () => {} };
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             """)
 
             page = context.new_page()
             token = None
 
-            # Перехоплюємо ТІЛЬКИ потрібний запит
+            # Перехоплюємо токен
             def intercept(route, request):
                 nonlocal token
-                url = request.url
-                if 'mattel-checkout-prd.fly.dev/api/product-inventory' in url:
+                if 'mattel-checkout-prd.fly.dev/api/product-inventory' in request.url:
                     auth = request.headers.get('authorization') or request.headers.get('Authorization')
                     if auth and auth.startswith('Bearer '):
                         token = auth
                         print(f"ТОКЕН ЗНАЙДЕНО: {auth[:70]}...")
-                    else:
-                        print(f"Запит без токена: {url}")
                 route.continue_()
 
             page.route('**/*', intercept)
@@ -262,21 +256,34 @@ def get_token_with_playwright():
                 timeout=60000
             )
 
-            print("Чекаємо завантаження shop.app (до 15 сек)...")
-            page.wait_for_load_state('networkidle', timeout=15000)
+            print("Чекаємо до 20 сек на завантаження (без networkidle)...")
+            page.wait_for_timeout(5000)  # Дозволяємо завантажитись
 
-            print("Чекаємо запит до product-inventory (до 10 сек)...")
-            start_time = time.time()
-            while not token and time.time() - start_time < 10:
+            # Чекаємо токен до 20 сек
+            start = time.time()
+            while not token and time.time() - start < 20:
                 page.wait_for_timeout(1000)
+                print(f"Чекаємо токен... ({int(time.time() - start)} сек)")
 
-            browser.close()
-            print("Token:", token if token else "НЕ ЗНАЙДЕНО")
-            return token
+            # Повертаємо токен, навіть якщо сторінка не "networkidle"
+            if token:
+                print("ТОКЕН УСПІШНО ОТРИМАНО!")
+                return token
+            else:
+                print("Токен не знайдено за 20 сек.")
+                return None
 
     except Exception as e:
         print("Playwright помилка:", str(e))
         return None
+    finally:
+        # Гарантовано закриваємо браузер
+        if browser:
+            try:
+                browser.close()
+                print("Браузер закрито.")
+            except:
+                pass
 
 
 def get_item_details(token, id):
