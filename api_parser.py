@@ -277,13 +277,28 @@ def get_token_with_playwright():
         print("Playwright помилка:", str(e))
         return None
     finally:
-        # Гарантовано закриваємо браузер
+        # Безпечне завершення Playwright
         if browser:
             try:
+                # Спробуємо прибрати маршрути перед закриттям
+                try:
+                    for context in browser.contexts:
+                        for page in context.pages:
+                            try:
+                                page.unroute('**/*')
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
                 browser.close()
-                print("Браузер закрито.")
-            except:
-                pass
+                print("Браузер закрито без помилок.")
+            except Exception as e:
+                # Ігноруємо типові помилки закриття
+                if "TargetClosedError" in str(e) or "CancelledError" in str(e):
+                    print("⚠️ Попередження: браузер уже був закритий (ігноруємо).")
+                else:
+                    print(f"⚠️ Помилка при закритті браузера: {e}")
 
 
 def get_item_details(token, id):
