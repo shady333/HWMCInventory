@@ -301,86 +301,88 @@ def get_token_with_playwright():
                     print(f"⚠️ Помилка при закритті браузера: {e}")
 
 
-def get_item_details(token, id):
+def get_item_details(token, product_id):
     url = "https://mattel-checkout-prd.fly.dev/api/product-inventory"
 
     querystring = {
-        "authorization": token,
-        "productIds": "gid://shopify/Product/"+id}
+        "productIds": f"gid://shopify/Product/{product_id}"
+    }
 
-    payload = ""
     headers = {
-        "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Accept-Language": "uk,en-US;q=0.9,en;q=0.8,hr;q=0.7",
         "Authorization": token,
-        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
         "Origin": "https://extensions.shopifycdn.com",
         "Referer": "https://extensions.shopifycdn.com/",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "cross-site",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
     }
 
     try:
         resp = requests.get(url, headers=headers, params=querystring, timeout=15)
     except Exception as e:
-        print(f"❌ HTTP request failed for id={id}: {e}")
+        print(f"HTTP request failed for id={product_id}: {e}")
         return 0, 0
 
     if resp.status_code != 200:
-        print(f"❌ Non-200 response ({resp.status_code}) for id={id}")
+        print(f"Non-200 response ({resp.status_code}) for id={product_id}")
         return 0, 0
 
     try:
         data = resp.json()
     except json.JSONDecodeError:
-        print(f"❌ Response is not valid JSON for id={id}")
+        print(f"Response is not valid JSON for id={product_id}")
         return 0, 0
 
-        # Очікуємо список із одним елементом — захищено від порожнього списку
-    if not data or not isinstance(data, list):
+    if not data or not isinstance(data, list) or len(data) == 0:
         return 0, 0
 
-    item = data[0] if len(data) > 0 else {}
-    total_inventory = item.get("totalInventory", 0)
+    item = data[0]
+    total_inventory = item.get("totalInventory", 0) or 0
 
-    # Якщо variantMeta немає або воно None — повертаємо 0 для variant_qty
+    # === Обробка variantMeta ===
     variant_meta = item.get("variantMeta")
-    if not variant_meta:
-        return total_inventory or 0, 0
+    if not variant_meta or not variant_meta.get("value"):
+        return int(total_inventory), 0
 
-    value = variant_meta.get("value")
-    if not value:
-        return total_inventory or 0, 0
+    value = variant_meta["value"]
 
-    # variantMeta.value може бути рядком JSON — пробуємо розпарсити
+    # Спроба розпарсити JSON
     try:
         parsed = json.loads(value)
     except (TypeError, json.JSONDecodeError):
-        # Якщо не вдається розпарсити — повертаємо 0 для qty
-        return total_inventory or 0, 0
+        return int(total_inventory), 0
 
-    # parsed очікуємо як список з об'єктом, всередині variant_inventory
-    if not parsed or not isinstance(parsed, list):
-        return total_inventory or 0, 0
+    if not parsed or not isinstance(parsed, list) or len(parsed) == 0:
+        return int(total_inventory), 0
 
-    vm = parsed[0] if len(parsed) > 0 else {}
-    variant_inventory = vm.get("variant_inventory")
+    first_variant = parsed[0]
+    variant_inventory = first_variant.get("variant_inventory", [])
+
     if not variant_inventory or not isinstance(variant_inventory, list):
-        return total_inventory or 0, 0
+        return int(total_inventory), 0
 
-    # Шукаємо перший елемент з inventorystatus == "Available"
+    # === ЛОГІКА ВИБОРУ qty ===
+    available_qty = None
+    backordered_qty = None
+
     for entry in variant_inventory:
-        try:
-            if entry.get("variant_inventorystatus") == "Available":
-                qty = entry.get("variant_qty", 0) or 0
-                # гарантуємо, що повертаємо int
-                return int(total_inventory or 0), int(qty)
-        except Exception:
-            continue
+        status = entry.get("variant_inventorystatus")
+        qty = entry.get("variant_qty", 0) or 0
 
-    # Якщо не знайдено Available — повертаємо 0 для qty
-    return int(total_inventory or 0), 0
+        if status == "Available":
+            available_qty = qty
+        elif status == "Backordered" and backordered_qty is None:
+            backordered_qty = qty  # беремо перший Backordered
+
+    # 1. Якщо є "Available" → повертаємо його
+    if available_qty is not None:
+        return int(total_inventory), int(available_qty)
+
+    # 2. Якщо немає "Available", але є "Backordered" → повертаємо його qty
+    if backordered_qty is not None:
+        return int(total_inventory), int(backordered_qty)
+
+    # 3. Якщо нічого немає → повертаємо 0
+    return int(total_inventory), 0
 
 
 def update_products_qty(data_list, token):
