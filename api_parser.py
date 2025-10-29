@@ -281,20 +281,20 @@ def get_item_details(token, product_id):
         resp = requests.get(url, headers=headers, params=querystring, timeout=15)
     except Exception as e:
         print(f"HTTP request failed for id={product_id}: {e}")
-        return 0, 0
+        return 0, 0, False
 
     if resp.status_code != 200:
         print(f"Non-200 response ({resp.status_code}) for id={product_id}")
-        return 0, 0
+        return 0, 0, False
 
     try:
         data = resp.json()
     except json.JSONDecodeError:
         print(f"Response is not valid JSON for id={product_id}")
-        return 0, 0
+        return 0, 0, False
 
     if not data or not isinstance(data, list) or len(data) == 0:
-        return 0, 0
+        return 0, 0, False
 
     item = data[0]
     total_inventory = item.get("totalInventory", 0) or 0
@@ -302,7 +302,7 @@ def get_item_details(token, product_id):
     # === Обробка variantMeta ===
     variant_meta = item.get("variantMeta")
     if not variant_meta or not variant_meta.get("value"):
-        return int(total_inventory), 0
+        return int(total_inventory), 0, True
 
     value = variant_meta["value"]
 
@@ -310,16 +310,16 @@ def get_item_details(token, product_id):
     try:
         parsed = json.loads(value)
     except (TypeError, json.JSONDecodeError):
-        return int(total_inventory), 0
+        return int(total_inventory), 0, True
 
     if not parsed or not isinstance(parsed, list) or len(parsed) == 0:
-        return int(total_inventory), 0
+        return int(total_inventory), 0, True
 
     first_variant = parsed[0]
     variant_inventory = first_variant.get("variant_inventory", [])
 
     if not variant_inventory or not isinstance(variant_inventory, list):
-        return int(total_inventory), 0
+        return int(total_inventory), 0, True
 
     # === ЛОГІКА ВИБОРУ qty ===
     available_qty = None
@@ -336,14 +336,14 @@ def get_item_details(token, product_id):
 
     # 1. Якщо є "Available" → повертаємо його
     if available_qty is not None:
-        return int(total_inventory), int(available_qty)
+        return int(total_inventory), int(available_qty), True
 
     # 2. Якщо немає "Available", але є "Backordered" → повертаємо його qty
     if backordered_qty is not None:
-        return int(total_inventory), int(backordered_qty)
+        return int(total_inventory), int(backordered_qty), True
 
     # 3. Якщо нічого немає → повертаємо 0
-    return int(total_inventory), 0
+    return int(total_inventory), 0, True
 
 
 def update_products_qty(data_list, token):
@@ -361,7 +361,10 @@ def update_products_qty(data_list, token):
             continue
 
         try:
-            qty, total = get_item_details(token, item_id)
+            qty, total, updated = get_item_details(token, item_id)
+
+            if not updated:
+                continue
 
             # Якщо повертає 0, 0 — не обов'язково помилка, може бути порожній stock
             data['max_qty'] = total
@@ -374,25 +377,23 @@ def update_products_qty(data_list, token):
                 token = get_token_with_playwright()
                 if token:
                     try:
-                        qty, total = get_item_details(token, item_id)
+                        qty, total, updated = get_item_details(token, item_id)
+                        if not updated:
+                            continue
                         data['max_qty'] = total
                         data['current_qty'] = qty
                     except Exception as e:
                         print(f"❌ Не вдалося повторно оновити {item_id}: {e}")
-                        data['max_qty'] = 0
-                        data['current_qty'] = 0
+                        continue
                 else:
                     print("❌ Не вдалося оновити токен.")
-                    data['max_qty'] = 0
-                    data['current_qty'] = 0
+                    continue
             else:
                 print(f"❌ HTTP помилка для {item_id}: {e}")
-                data['max_qty'] = 0
-                data['current_qty'] = 0
+                continue
         except Exception as e:
             print(f"⚠️ Помилка при оновленні {item_id}: {e}")
-            data['max_qty'] = 0
-            data['current_qty'] = 0
+            continue
 
     return data_list
 
