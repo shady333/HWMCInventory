@@ -208,39 +208,74 @@ def process_data(collection_name):
 def get_token_with_playwright():
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
+            # Запускаємо Chromium у headless-режимі з CI-аргументами
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--window-size=1920,1080',
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--disable-blink-features=AutomationControlled'
+                ]
+            )
 
+            # Імітуємо реальний браузер
+            context = browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+                java_script_enabled=True,
+                bypass_csp=True
+            )
+
+            # Видаляємо ознаки автоматизації
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                window.chrome = { runtime: {} };
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            """)
+
+            page = context.new_page()
             token = None
 
+            # Перехоплюємо ТІЛЬКИ потрібний запит
             def intercept(route, request):
                 nonlocal token
-                if 'product-inventory' in request.url:
-                    auth = request.headers.get('authorization')
+                url = request.url
+                if 'mattel-checkout-prd.fly.dev/api/product-inventory' in url:
+                    auth = request.headers.get('authorization') or request.headers.get('Authorization')
                     if auth and auth.startswith('Bearer '):
                         token = auth
+                        print(f"ТОКЕН ЗНАЙДЕНО: {auth[:70]}...")
+                    else:
+                        print(f"Запит без токена: {url}")
                 route.continue_()
 
             page.route('**/*', intercept)
 
-            # Йдемо на товар (будь-який)
-            page.goto('https://creations.mattel.com/checkouts/cn/hWN4eQSmROJAn1IYF6ZTjU27/en-us?auto_redirect=false&edge_redirect=true&skip_shop_pay=true')
-            page.wait_for_timeout(3000)
-            # page.click('button:has-text("Add to Bag")', timeout=5000)
-            # page.wait_for_timeout(2000)
-            # page.goto('https://creations.mattel.com/cart')
-            # page.wait_for_timeout(2000)
-            # page.click('button:has-text("Checkout")', timeout=5000)
-            # page.wait_for_timeout(7000)  # чекаємо shop.app
+            print("Перехід на checkout URL...")
+            page.goto(
+                'https://creations.mattel.com/checkouts/cn/hWN4eQSmROJAn1IYF6ZTjU27/en-us?auto_redirect=false&edge_redirect=true&skip_shop_pay=true',
+                timeout=60000
+            )
+
+            print("Чекаємо завантаження shop.app (до 15 сек)...")
+            page.wait_for_load_state('networkidle', timeout=15000)
+
+            print("Чекаємо запит до product-inventory (до 10 сек)...")
+            start_time = time.time()
+            while not token and time.time() - start_time < 10:
+                page.wait_for_timeout(1000)
 
             browser.close()
-
-            print("Token:", token)
-
+            print("Token:", token if token else "НЕ ЗНАЙДЕНО")
             return token
+
     except Exception as e:
-        print("Playwright помилка:", e)
+        print("Playwright помилка:", str(e))
         return None
 
 
