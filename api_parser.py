@@ -383,25 +383,50 @@ def get_item_details(token, id):
     return int(total_inventory or 0), 0
 
 
-def update_products_qty(data_list):
-    token = get_token_with_playwright()
+def update_products_qty(data_list, token):
     if not token:
-        print("❌ Не вдалося отримати токен.")
+        print("❌ Токен не отримано, пропускаємо оновлення.")
         return data_list
 
     for data in data_list:
-        print(f"Updating details for - " + data['car_name'])
+        print(f"Updating details for - {data['car_name']}")
         item_id = data.get('uid', '')
-        if item_id:
-            try:
-                qty, total = get_item_details(token, item_id)
-                data['max_qty'] = total
-                data['current_qty'] = qty
-            except Exception as e:
-                print(f"⚠️ Помилка при оновленні {item_id}: {e}")
+        if not item_id:
+            data['max_qty'] = 0
+            data['current_qty'] = 0
+            continue
+
+        try:
+            total, qty = get_item_details(token, item_id)
+
+            # Якщо повертає 0, 0 — не обов'язково помилка, може бути порожній stock
+            data['max_qty'] = total
+            data['current_qty'] = qty
+
+        except requests.exceptions.HTTPError as e:
+            # Якщо 401 — пробуємо отримати новий токен
+            if e.response.status_code == 401:
+                print("⚠️ Токен недійсний, пробуємо оновити...")
+                token = get_token_with_playwright()
+                if token:
+                    try:
+                        total, qty = get_item_details(token, item_id)
+                        data['max_qty'] = total
+                        data['current_qty'] = qty
+                    except Exception as e:
+                        print(f"❌ Не вдалося повторно оновити {item_id}: {e}")
+                        data['max_qty'] = 0
+                        data['current_qty'] = 0
+                else:
+                    print("❌ Не вдалося оновити токен.")
+                    data['max_qty'] = 0
+                    data['current_qty'] = 0
+            else:
+                print(f"❌ HTTP помилка для {item_id}: {e}")
                 data['max_qty'] = 0
                 data['current_qty'] = 0
-        else:
+        except Exception as e:
+            print(f"⚠️ Помилка при оновленні {item_id}: {e}")
             data['max_qty'] = 0
             data['current_qty'] = 0
 
@@ -415,5 +440,19 @@ if __name__ == "__main__":
                    'hot-wheels-collectors|hot-wheels-f1-collector-vehicles',
                    'matchbox-collectors|matchbox-collectors',
                    'mattel-creations|mattel-creations']
+
+    token = get_token_with_playwright()
+
     for item in collections:
-        process_data(item)
+        try:
+            results = fetch_data_from_api(item)
+            data_list = process_api_results(results)
+
+            # Передаємо поточний токен у функцію
+            updated_data = update_products_qty(data_list, token)
+
+            # Оновлюємо CSV
+            for data in updated_data:
+                update_csv(data)
+        except Exception as e:
+            print(f"❌ Помилка при обробці колекції {item}: {e}")
