@@ -157,8 +157,8 @@ def update_csv(data, csv_file='output.csv'):
         current_qty = int(data.get('current_qty') or 0)
 
         # Якщо max_qty менше, ніж current_qty — оновлюємо max_qty
-        if max_qty < current_qty:
-            max_qty = current_qty
+        # if max_qty < current_qty:
+        #     max_qty = current_qty
 
         rows.append({
             'car_name': data['car_name'],
@@ -397,7 +397,7 @@ def update_products_qty(data_list, token):
             continue
 
         try:
-            total, qty = get_item_details(token, item_id)
+            qty, total = get_item_details(token, item_id)
 
             # Якщо повертає 0, 0 — не обов'язково помилка, може бути порожній stock
             data['max_qty'] = total
@@ -410,7 +410,7 @@ def update_products_qty(data_list, token):
                 token = get_token_with_playwright()
                 if token:
                     try:
-                        total, qty = get_item_details(token, item_id)
+                        qty, total = get_item_details(token, item_id)
                         data['max_qty'] = total
                         data['current_qty'] = qty
                     except Exception as e:
@@ -436,10 +436,11 @@ def update_products_qty(data_list, token):
 
 # Основна точка входу
 if __name__ == "__main__":
-    collections = ['hot-wheels-collectors|hot-wheels-collectors',
-                   'hot-wheels-collectors|hot-wheels-f1-collector-vehicles',
-                   'matchbox-collectors|matchbox-collectors',
-                   'mattel-creations|mattel-creations']
+    collections = ['hot-wheels-collectors|hot-wheels-collectors']
+        # ,
+        #            'hot-wheels-collectors|hot-wheels-f1-collector-vehicles',
+        #            'matchbox-collectors|matchbox-collectors',
+        #            'mattel-creations|mattel-creations']
 
     token = get_token_with_playwright()
 
