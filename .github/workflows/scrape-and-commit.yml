@@ -47,34 +47,22 @@ jobs:
         with:
           python-version: '3.10' # Використовуємо Python 3.10 (можете змінити версію)
 
-      - name: Install system dependencies (Ubuntu 24.04+)
+      - name: Install minimal system deps
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libnss3 \
-            libxss1 \
             libasound2t64 \
             libatk-bridge2.0-0 \
-            libgtk-3-0 \
-            libgbm-dev \
-            libxshmfence-dev \
-            wget \
-            ca-certificates \
-            fonts-liberation \
-            libappindicator3-1 \
-            libxrandr2 \
+            libdrm2 \
+            libxkbcommon0 \
             libxcomposite1 \
-            libxcursor1 \
             libxdamage1 \
-            libxi6 \
-            libxtst6 \
-            libnss3-dev \
-            libatk1.0-0 \
-            libcairo-gobject2 \
+            libxrandr2 \
+            libgbm1 \
             libpango-1.0-0 \
-            libgdk-pixbuf2.0-0 \
-            libgtk-3-0 \
-            libx11-xcb1
+            libcairo2 \
+            libatspi2.0-0 \
+            libgtk-3-0
 
       # Крок 4: Встановлення залежностей із requirements.txt
       - name: Install dependencies
@@ -84,7 +72,7 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          playwright install --with-deps chromium
+          playwright install chromium
 
       # Крок 5: Запуск скрипта api_parser.py
       - name: Run scrape script
