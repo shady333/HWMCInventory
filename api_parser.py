@@ -4,6 +4,7 @@ import os
 import json
 import time
 from urllib.parse import urlparse, urljoin
+from playwright.sync_api import sync_playwright
 
 # Функція для видалення параметрів із URL
 def remove_url_params(url):
@@ -81,17 +82,18 @@ def process_api_results(results):
                 'car_name': item.get('name', ''),
                 'SKU': item.get('sku', ''),
                 'page_name': page_name,
-                'current_qty': item.get('ss_inventory_count', None),
+                # 'current_qty': item.get('ss_inventory_count', None),
                 'image_url': remove_url_params(item.get('imageUrl', '')),
-                'price': item.get('price', '')
+                'price': item.get('price', ''),
+                'uid': item.get('uid', '')
             }
             # Перевіряємо і конвертуємо current_qty
-            if data['current_qty'] is not None:
-                try:
-                    data['current_qty'] = int(float(data['current_qty']))  # Дозволяє конвертацію з рядків типу "123.0"
-                except (ValueError, TypeError):
-                    print(f"Невалідне значення ss_inventory_count для {data['car_name']}: {data['current_qty']}, встановлено None")
-                    data['current_qty'] = None
+            # if data['current_qty'] is not None:
+            #     try:
+            #         data['current_qty'] = int(float(data['current_qty']))  # Дозволяє конвертацію з рядків типу "123.0"
+            #     except (ValueError, TypeError):
+            #         print(f"Невалідне значення ss_inventory_count для {data['car_name']}: {data['current_qty']}, встановлено None")
+            #         data['current_qty'] = None
             print(f"Оброблено елемент: {data}")
             data_list.append(data)
         else:
@@ -124,16 +126,24 @@ def update_csv(data, csv_file='output.csv'):
                     row = {field: row.get(field, '') for field in fieldnames}
                     # Перевіряємо, чи є збіг за page_name, car_name і SKU
 
-
                     if (row['page_name'] == data['page_name'] and
-                        row['car_name'] == data['car_name'] and
-                        row['SKU'] == data['SKU']):
-                        print(f"Знайдено збіг для {data['car_name']}, оновлюємо current_qty з {row['current_qty']} на {data['current_qty']}")
-                        row['current_qty'] = str(data['current_qty'])
-                        # Зберігаємо попередні значення image_url і price, якщо вони є
-                        row['image_url'] = row['image_url'] if row['image_url'] else data['image_url']
-                        row['price'] = row['price'] if row['price'] else data['price']
-                        row['max_qty'] = str(max(int(row['max_qty'] or 0), data['current_qty']))  # Оновлюємо max_qty
+                            row['car_name'] == data['car_name'] and
+                            row['SKU'] == data['SKU']):
+                        old_qty = int(row.get('current_qty') or 0)
+                        new_qty = int(data.get('current_qty') or 0)
+
+                        # Оновлюємо current_qty мінімальним значенням
+                        row['current_qty'] = str(min(old_qty, new_qty))
+
+                        print(f"Знайдено збіг для {data['car_name']}, current_qty: {old_qty} → {row['current_qty']}")
+
+                        # Якщо image_url або price порожні — підставляємо з data
+                        row['image_url'] = row['image_url'] if row['image_url'] else data.get('image_url', '')
+                        row['price'] = row['price'] if row['price'] else data.get('price', '')
+
+                        # max_qty — оновлюємо до більшого значення
+                        row['max_qty'] = str(max(int(row.get('max_qty') or 0), new_qty))
+
                         updated = True
                     rows.append(row)
         except (csv.Error, ValueError) as e:
@@ -143,12 +153,19 @@ def update_csv(data, csv_file='output.csv'):
     # Додаємо новий рядок, якщо не було оновлення
     if not updated:
         print(f"Додано новий рядок для {data['car_name']}")
+        max_qty = int(data.get('max_qty') or 0)
+        current_qty = int(data.get('current_qty') or 0)
+
+        # Якщо max_qty менше, ніж current_qty — оновлюємо max_qty
+        if max_qty < current_qty:
+            max_qty = current_qty
+
         rows.append({
             'car_name': data['car_name'],
             'SKU': data['SKU'],
             'page_name': data['page_name'],
-            'max_qty': str(data['current_qty']),  # max_qty = current_qty для нового рядка
-            'current_qty': str(data['current_qty']),
+            'max_qty': str(max_qty),
+            'current_qty': str(current_qty),
             'image_url': data['image_url'],
             'price': data['price']
         })
@@ -178,12 +195,162 @@ def process_data(collection_name):
         # Обробляємо результати API
         data_list = process_api_results(results)
 
+        data_updated = update_products_qty(data_list)
+
         # Оновлюємо CSV для кожного елемента
-        for data in data_list:
+        for data in data_updated:
             update_csv(data)
     except Exception as e:
         print(f"Виникла помилка під час обробки даних: {e}")
         raise  # Повторно викликаємо виняток, щоб GitHub Actions зафіксував його
+
+
+def get_token_with_playwright():
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+
+            token = None
+
+            def intercept(route, request):
+                nonlocal token
+                if 'product-inventory' in request.url:
+                    auth = request.headers.get('authorization')
+                    if auth and auth.startswith('Bearer '):
+                        token = auth
+                route.continue_()
+
+            page.route('**/*', intercept)
+
+            # Йдемо на товар (будь-який)
+            page.goto('https://creations.mattel.com/checkouts/cn/hWN4eQSmROJAn1IYF6ZTjU27/en-us?auto_redirect=false&edge_redirect=true&skip_shop_pay=true')
+            page.wait_for_timeout(3000)
+            # page.click('button:has-text("Add to Bag")', timeout=5000)
+            # page.wait_for_timeout(2000)
+            # page.goto('https://creations.mattel.com/cart')
+            # page.wait_for_timeout(2000)
+            # page.click('button:has-text("Checkout")', timeout=5000)
+            # page.wait_for_timeout(7000)  # чекаємо shop.app
+
+            browser.close()
+
+            print("Token:", token)
+
+            return token
+    except Exception as e:
+        print("Playwright помилка:", e)
+        return None
+
+
+def get_item_details(token, id):
+    url = "https://mattel-checkout-prd.fly.dev/api/product-inventory"
+
+    querystring = {
+        "authorization": token,
+        "productIds": "gid://shopify/Product/"+id}
+
+    payload = ""
+    headers = {
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "uk,en-US;q=0.9,en;q=0.8,hr;q=0.7",
+        "Authorization": token,
+        "Content-Type": "application/json",
+        "Origin": "https://extensions.shopifycdn.com",
+        "Referer": "https://extensions.shopifycdn.com/",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "cross-site",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, params=querystring, timeout=15)
+    except Exception as e:
+        print(f"❌ HTTP request failed for id={id}: {e}")
+        return 0, 0
+
+    if resp.status_code != 200:
+        print(f"❌ Non-200 response ({resp.status_code}) for id={id}")
+        return 0, 0
+
+    try:
+        data = resp.json()
+    except json.JSONDecodeError:
+        print(f"❌ Response is not valid JSON for id={id}")
+        return 0, 0
+
+        # Очікуємо список із одним елементом — захищено від порожнього списку
+    if not data or not isinstance(data, list):
+        return 0, 0
+
+    item = data[0] if len(data) > 0 else {}
+    total_inventory = item.get("totalInventory", 0)
+
+    # Якщо variantMeta немає або воно None — повертаємо 0 для variant_qty
+    variant_meta = item.get("variantMeta")
+    if not variant_meta:
+        return total_inventory or 0, 0
+
+    value = variant_meta.get("value")
+    if not value:
+        return total_inventory or 0, 0
+
+    # variantMeta.value може бути рядком JSON — пробуємо розпарсити
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        # Якщо не вдається розпарсити — повертаємо 0 для qty
+        return total_inventory or 0, 0
+
+    # parsed очікуємо як список з об'єктом, всередині variant_inventory
+    if not parsed or not isinstance(parsed, list):
+        return total_inventory or 0, 0
+
+    vm = parsed[0] if len(parsed) > 0 else {}
+    variant_inventory = vm.get("variant_inventory")
+    if not variant_inventory or not isinstance(variant_inventory, list):
+        return total_inventory or 0, 0
+
+    # Шукаємо перший елемент з inventorystatus == "Available"
+    for entry in variant_inventory:
+        try:
+            if entry.get("variant_inventorystatus") == "Available":
+                qty = entry.get("variant_qty", 0) or 0
+                # гарантуємо, що повертаємо int
+                return int(total_inventory or 0), int(qty)
+        except Exception:
+            continue
+
+    # Якщо не знайдено Available — повертаємо 0 для qty
+    return int(total_inventory or 0), 0
+
+
+def update_products_qty(data_list):
+    token = get_token_with_playwright()
+    if not token:
+        print("❌ Не вдалося отримати токен.")
+        return data_list
+
+    for data in data_list:
+        print(f"Updating details for - " + data['car_name'])
+        item_id = data.get('uid', '')
+        if item_id:
+            try:
+                qty, total = get_item_details(token, item_id)
+                data['max_qty'] = total
+                data['current_qty'] = qty
+            except Exception as e:
+                print(f"⚠️ Помилка при оновленні {item_id}: {e}")
+                data['max_qty'] = 0
+                data['current_qty'] = 0
+        else:
+            data['max_qty'] = 0
+            data['current_qty'] = 0
+
+    return data_list
+
+
 
 # Основна точка входу
 if __name__ == "__main__":
