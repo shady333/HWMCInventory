@@ -107,16 +107,26 @@ def update_csv(data, csv_file='output.csv'):
                         old_qty = int(row.get('current_qty') or 0)
                         new_qty = int(data.get('current_qty') or 0)
 
-                        row['current_qty'] = str(min(old_qty, new_qty))
+                        row['current_qty'] = str(new_qty)
+
+                        # if old_qty == 0:
+                        #     row['current_qty'] = str(max(old_qty, new_qty))
+                        # else:
+                        #     row['current_qty'] = str(min(old_qty, new_qty))
 
                         print(f"Знайдено збіг для {data['car_name']}, current_qty: {old_qty} → {row['current_qty']}")
 
                         row['image_url'] = row['image_url'] if row['image_url'] else data.get('image_url', '')
                         row['price'] = row['price'] if row['price'] else data.get('price', '')
 
-                        row['max_qty'] = str(max(int(row.get('max_qty') or 0), new_qty))
+                        old_total = int(row.get('max_qty') or 0)
+                        new_total = int(data.get('max_qty') or 0)
 
-                        updated = True
+                        row['max_qty'] = str(new_total)
+
+                        # row['max_qty'] = str(max(old_total, new_total))
+                        if (old_qty != new_qty) or (old_total != new_total):
+                            updated = True
                     rows.append(row)
         except (csv.Error, ValueError) as e:
             print(f"Помилка читання CSV-файлу {csv_file}: {e}")
@@ -262,6 +272,9 @@ def get_token_with_playwright():
 
 
 def get_item_details(token, product_id):
+
+    if product_id == '9083040727245':
+        print("")
 
     url = "https://mattel-checkout-prd.fly.dev/api/product-inventory"
 
