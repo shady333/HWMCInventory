@@ -125,8 +125,7 @@ def update_csv(data, csv_file='output.csv'):
                         row['max_qty'] = str(new_total)
 
                         # row['max_qty'] = str(max(old_total, new_total))
-                        if (old_qty != new_qty) or (old_total != new_total):
-                            updated = True
+                        updated = True
                     rows.append(row)
         except (csv.Error, ValueError) as e:
             print(f"Помилка читання CSV-файлу {csv_file}: {e}")
