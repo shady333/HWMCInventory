@@ -257,6 +257,8 @@ def get_item_inventory(token: str, product_id: str) -> Tuple[int, int, bool]:
 
     Returns:
         (max_qty, current_qty, success)
+        max_qty - максимальна кількість з variant_inventory (що була відома)
+        current_qty - totalInventory (скільки залишилось зараз, може бути від'ємним)
     """
     headers = {
         "Authorization": token,
@@ -283,35 +285,44 @@ def get_item_inventory(token: str, product_id: str) -> Tuple[int, int, bool]:
         return 0, 0, True  # Порожній інвентар - це не помилка
 
     item = data[0]
+    # totalInventory = скільки залишилось (може бути від'ємним)
     total_inventory = item.get("totalInventory", 0) or 0
 
-    # Обробка variantMeta
+    # Обробка variantMeta для отримання max_qty
     variant_meta = item.get("variantMeta")
     if not variant_meta or not variant_meta.get("value"):
-        return int(total_inventory), 0, True
+        # Якщо немає варіантів, max_qty невідомий (0)
+        return 0, int(total_inventory), True
 
     try:
         parsed = json.loads(variant_meta["value"])
         if not parsed or not isinstance(parsed, list):
-            return int(total_inventory), 0, True
+            return 0, int(total_inventory), True
 
         variant_inventory = parsed[0].get("variant_inventory", [])
     except (TypeError, json.JSONDecodeError, IndexError, KeyError):
-        return int(total_inventory), 0, True
+        return 0, int(total_inventory), True
 
-    # Пріоритет: Available → Backordered → 0
+    # Шукаємо максимальну кількість з варіантів
+    # Пріоритет: Available → Backordered
+    max_qty = 0
+
     for entry in variant_inventory:
         if entry.get("variant_inventorystatus") == "Available":
             qty = entry.get("variant_qty", 0) or 0
-            return int(total_inventory), int(qty), True
+            max_qty = int(qty)
+            break  # Available має найвищий пріоритет
 
     # Якщо немає Available, шукаємо Backordered
-    for entry in variant_inventory:
-        if entry.get("variant_inventorystatus") == "Backordered":
-            qty = entry.get("variant_qty", 0) or 0
-            return int(total_inventory), int(qty), True
+    if max_qty == 0:
+        for entry in variant_inventory:
+            if entry.get("variant_inventorystatus") == "Backordered":
+                qty = entry.get("variant_qty", 0) or 0
+                max_qty = int(qty)
+                break
 
-    return int(total_inventory), 0, True
+    # Повертаємо (max_qty з варіантів, current_qty з totalInventory)
+    return max_qty, int(total_inventory), True
 
 
 def update_products_qty(products: List[Product], token_manager: TokenManager) -> List[Product]:
@@ -454,16 +465,29 @@ class CSVManager:
                 with open(self.csv_file, 'r', newline='', encoding='utf-8') as f:
                     reader = csv.DictReader(f)
                     for row in reader:
-                        products.append(Product(
-                            car_name=row.get('car_name', ''),
-                            SKU=row.get('SKU', ''),
-                            page_name=row.get('page_name', ''),
-                            image_url=row.get('image_url', ''),
-                            price=row.get('price', ''),
-                            uid='',  # UID не зберігається в CSV
-                            max_qty=int(row.get('max_qty', 0) or 0),
-                            current_qty=int(row.get('current_qty', 0) or 0)
-                        ))
+                        try:
+                            max_qty = int(row.get('max_qty', 0) or 0)
+                            current_qty = int(row.get('current_qty', 0) or 0)
+
+                            # Нормалізація від'ємних значень
+                            # max_qty може бути від'ємним (totalInventory від API)
+                            # current_qty теж може бути від'ємним, але ми його обнуляємо
+                            if current_qty < 0:
+                                current_qty = 0
+
+                            products.append(Product(
+                                car_name=row.get('car_name', ''),
+                                SKU=row.get('SKU', ''),
+                                page_name=row.get('page_name', ''),
+                                image_url=row.get('image_url', ''),
+                                price=row.get('price', ''),
+                                uid='',  # UID не зберігається в CSV
+                                max_qty=max_qty,
+                                current_qty=current_qty
+                            ))
+                        except (ValueError, TypeError) as e:
+                            print(f"⚠️ Помилка парсингу рядка CSV: {e}, рядок: {row}")
+                            continue
             except Exception as e:
                 print(f"⚠️ Помилка читання CSV: {e}")
 
