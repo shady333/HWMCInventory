@@ -3,431 +3,562 @@ import csv
 import os
 import json
 import time
-from playwright.sync_api import sync_playwright
+from typing import List, Dict, Tuple, Optional
+from playwright.sync_api import sync_playwright, Browser
+from dataclasses import dataclass, asdict
+from functools import wraps
 
-def remove_url_params(url):
+# Константи
+API_BASE_URL = "https://mattel-creations-searchspring-proxy.netlify.app/api/search"
+INVENTORY_API_URL = "https://mattel-checkout-prd.fly.dev/api/product-inventory"
+CHECKOUT_URL = "https://creations.mattel.com/checkouts/cn/hWN4eQSmROJAn1IYF6ZTjU27/en-us?auto_redirect=false&edge_redirect=true&skip_shop_pay=true"
+
+CSV_FIELDNAMES = ['car_name', 'SKU', 'page_name', 'max_qty', 'current_qty', 'image_url', 'price']
+TARGET_CATEGORIES = [['Vehicles'], ['Action Figures']]
+
+COLLECTIONS = [
+    'hot-wheels-collectors|hot-wheels-collectors',
+    'hot-wheels-collectors|hot-wheels-f1-collector-vehicles',
+    'matchbox-collectors|matchbox-collectors',
+    'mattel-creations|mattel-creations'
+]
+
+# Налаштування retry
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # секунд
+TOKEN_WAIT_TIMEOUT = 20  # секунд
+
+
+@dataclass
+class Product:
+    """Клас для представлення продукту."""
+    car_name: str
+    SKU: str
+    page_name: str
+    image_url: str
+    price: str
+    uid: str
+    max_qty: int = 0
+    current_qty: int = 0
+
+    def to_csv_dict(self) -> Dict:
+        """Конвертує продукт у словник для CSV."""
+        return {
+            'car_name': self.car_name,
+            'SKU': self.SKU,
+            'page_name': self.page_name,
+            'max_qty': str(self.max_qty),
+            'current_qty': str(self.current_qty),
+            'image_url': self.image_url,
+            'price': self.price
+        }
+
+    def matches(self, other: 'Product') -> bool:
+        """Перевіряє чи продукти співпадають."""
+        return (self.page_name == other.page_name and
+                self.car_name == other.car_name and
+                self.SKU == other.SKU)
+
+
+def retry_on_failure(max_attempts: int = MAX_RETRIES, delay: int = RETRY_DELAY):
+    """Декоратор для повторення запитів при помилках."""
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except requests.RequestException as e:
+                    if attempt == max_attempts:
+                        print(f"❌ Всі {max_attempts} спроби невдалі: {e}")
+                        raise
+                    print(f"⚠️ Спроба {attempt}/{max_attempts} невдала, повтор через {delay}с...")
+                    time.sleep(delay)
+            return None
+
+        return wrapper
+
+    return decorator
+
+
+def remove_url_params(url: str) -> str:
+    """Видаляє параметри з URL."""
     if not url or not isinstance(url, str):
         return ''
-    try:
-        return url.split('?')[0]
-    except Exception as e:
-        print(f"Помилка обробки URL {url}: {e}")
-        return ''
+    return url.split('?')[0]
 
-def fetch_data_from_api(collection_name):
-    itemsArray = collection_name.split('|')
-    collection = itemsArray[0]
-    handle = itemsArray[1]
 
+@retry_on_failure(max_attempts=2)
+def fetch_data_from_api(collection_name: str) -> List[Dict]:
+    """Отримує всі дані з API для заданої колекції."""
+    collection, handle = collection_name.split('|')
     all_results = []
-
     current_page = 1
-    total_pages = 1
 
-    while current_page <= total_pages:
-        api_url = (
-            "https://mattel-creations-searchspring-proxy.netlify.app/api/search?"
-            "domain=%2Fcollections%2F"
-            f"{collection}&"
-            "bgfilter.collection_handle="
-            f"{handle}&"
-            "resultsFormat=native&"
-            "resultsPerPage=999&"
-            f"page={current_page}&"
-            "bgfilter.ss_is_past_project=false&"
-            f"ts={int(time.time() * 1000)}"  # Dynamic timestamp
-        )
+    # Спочатку отримуємо першу сторінку, щоб дізнатися total_pages
+    while True:
+        params = {
+            "domain": f"/collections/{collection}",
+            "bgfilter.collection_handle": handle,
+            "resultsFormat": "native",
+            "resultsPerPage": "999",
+            "page": str(current_page),
+            "bgfilter.ss_is_past_project": "false",
+            "ts": str(int(time.time() * 1000))
+        }
 
-        try:
-            print(f"Fetching page {current_page} of {total_pages} from API: {api_url}")
-            response = requests.get(api_url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+        response = requests.get(API_BASE_URL, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
 
-            results = data.get('results', [])
-            all_results.extend(results)
-            print(f"Received {len(results)} results from page {current_page}")
-
-            pagination = data.get('pagination', {})
-            total_pages = pagination.get('totalPages', 1)
-            print(f"Total pages: {total_pages}")
-
-            current_page += 1
-
-        except (requests.RequestException, ValueError) as e:
-            print(f"Error fetching data from API for page {current_page}: {e}")
+        results = data.get('results', [])
+        if not results:
             break
 
-    print(f"Total results collected: {len(all_results)}")
+        all_results.extend(results)
+        print(f"📥 Сторінка {current_page}: отримано {len(results)} елементів")
+
+        # Перевіряємо чи є ще сторінки
+        pagination = data.get('pagination', {})
+        total_pages = pagination.get('totalPages', current_page)
+
+        if current_page >= total_pages:
+            break
+
+        current_page += 1
+
+    print(f"✅ Всього отримано {len(all_results)} елементів з '{collection}'")
     return all_results
 
-def process_api_results(results):
-    data_list = []
+
+def process_api_results(results: List[Dict]) -> List[Product]:
+    """Фільтрує та обробляє результати API."""
+    products = []
+
     for item in results:
-        if item.get('tags_category') == ['Vehicles'] or item.get('tags_category') == ['Action Figures']:
-            page_name = item.get('url', '').split('/')[-1]
-            data = {
-                'car_name': item.get('name', ''),
-                'SKU': item.get('sku', ''),
-                'page_name': page_name,
-                'image_url': remove_url_params(item.get('imageUrl', '')),
-                'price': item.get('price', ''),
-                'uid': item.get('uid', '')
-            }
-            print(f"Оброблено елемент: {data}")
-            data_list.append(data)
+        category = item.get('tags_category', [])
+
+        # Перевіряємо чи категорія в списку дозволених
+        if category in TARGET_CATEGORIES:
+            products.append(Product(
+                car_name=item.get('name', ''),
+                SKU=item.get('sku', ''),
+                page_name=item.get('url', '').split('/')[-1],
+                image_url=remove_url_params(item.get('imageUrl', '')),
+                price=item.get('price', ''),
+                uid=item.get('uid', '')
+            ))
+
+    print(f"🔍 Відфільтровано {len(products)} продуктів")
+    return products
+
+
+class TokenManager:
+    """Клас для управління токеном авторизації."""
+
+    def __init__(self):
+        self.token: Optional[str] = None
+        self.token_obtained_at: Optional[float] = None
+        self.token_lifetime = 240  # 4 хвилини (токен живе ~5 хв, беремо з запасом)
+        self.refresh_attempts = 0
+        self.max_refresh_attempts = 3
+
+    def is_token_valid(self) -> bool:
+        """Перевіряє чи токен ще дійсний."""
+        if not self.token or not self.token_obtained_at:
+            return False
+        elapsed = time.time() - self.token_obtained_at
+        return elapsed < self.token_lifetime
+
+    def get_token(self, force_refresh: bool = False) -> Optional[str]:
+        """Отримує токен (з кешу або новий)."""
+        if not force_refresh and self.is_token_valid():
+            elapsed = int(time.time() - self.token_obtained_at)
+            remaining = self.token_lifetime - elapsed
+            print(f"♻️ Використовуємо кешований токен (залишилось ~{remaining}с)")
+            return self.token
+
+        # Перевірка на занадто часті оновлення
+        if self.refresh_attempts >= self.max_refresh_attempts:
+            print(f"❌ Перевищено ліміт оновлень токена ({self.max_refresh_attempts})")
+            return None
+
+        self.refresh_attempts += 1
+        print(f"🌐 Отримуємо новий токен (спроба {self.refresh_attempts}/{self.max_refresh_attempts})...")
+
+        self.token = self._fetch_token_with_playwright()
+        if self.token:
+            self.token_obtained_at = time.time()
+            self.refresh_attempts = 0  # Скидаємо лічильник після успіху
+            print(f"✅ Токен отримано (дійсний ~{self.token_lifetime}с)")
         else:
-            print(f"Пропущено елемент: tags_category != ['Vehicles'], item={item.get('name', 'Unknown')}")
-    print(f"Загалом оброблено {len(data_list)} елементів із tags_category: ['Vehicles']")
-    return data_list
+            print("❌ Не вдалося отримати токен")
 
-def update_csv(data, csv_file='output.csv'):
-    if not data or data['current_qty'] is None:
-        print(f"Пропущено запис для {data.get('car_name', 'Unknown')}: current_qty is None")
-        return
+        return self.token
 
-    if 'F1' in data['car_name']:
-        print("")
-
-    fieldnames = ['car_name', 'SKU', 'page_name', 'max_qty', 'current_qty', 'image_url', 'price']
-    rows = []
-    updated = False
-
-    file_exists = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
-    if file_exists:
+    def _fetch_token_with_playwright(self) -> Optional[str]:
+        """Отримує токен авторизації через Playwright."""
         try:
-            with open(csv_file, 'r', newline='', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    row = {field: row.get(field, '') for field in fieldnames}
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
+                        '--disable-blink-features=AutomationControlled'
+                    ]
+                )
 
-                    if (row['page_name'] == data['page_name'] and
-                            row['car_name'] == data['car_name'] and
-                            row['SKU'] == data['SKU']):
-                        old_qty = int(row.get('current_qty') or 0)
-                        new_qty = int(data.get('current_qty') or 0)
+                context = browser.new_context(
+                    viewport={'width': 1920, 'height': 1080},
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    bypass_csp=True
+                )
 
-                        row['current_qty'] = str(new_qty)
+                context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                    window.chrome = { runtime: {}, app: {}, loadTimes: () => {} };
+                """)
 
-                        # if old_qty == 0:
-                        #     row['current_qty'] = str(max(old_qty, new_qty))
-                        # else:
-                        #     row['current_qty'] = str(min(old_qty, new_qty))
+                page = context.new_page()
+                token = None
 
-                        print(f"Знайдено збіг для {data['car_name']}, current_qty: {old_qty} → {row['current_qty']}")
+                def intercept(route, request):
+                    nonlocal token
+                    if 'mattel-checkout-prd.fly.dev/api/product-inventory' in request.url:
+                        auth = request.headers.get('authorization') or request.headers.get('Authorization')
+                        if auth and auth.startswith('Bearer '):
+                            token = auth
+                            print(f"✅ Токен отримано")
+                    route.continue_()
 
-                        row['image_url'] = row['image_url'] if row['image_url'] else data.get('image_url', '')
-                        row['price'] = row['price'] if row['price'] else data.get('price', '')
+                page.route('**/*', intercept)
+                page.goto(CHECKOUT_URL, timeout=60000)
 
-                        old_total = int(row.get('max_qty') or 0)
-                        new_total = int(data.get('max_qty') or 0)
-
-                        row['max_qty'] = str(new_total)
-
-                        # row['max_qty'] = str(max(old_total, new_total))
-                        updated = True
-                    rows.append(row)
-        except (csv.Error, ValueError) as e:
-            print(f"Помилка читання CSV-файлу {csv_file}: {e}")
-            rows = []
-
-    if not updated:
-        print(f"Додано новий рядок для {data['car_name']}")
-        max_qty = int(data.get('max_qty') or 0)
-        current_qty = int(data.get('current_qty') or 0)
-
-        rows.append({
-            'car_name': data['car_name'],
-            'SKU': data['SKU'],
-            'page_name': data['page_name'],
-            'max_qty': str(max_qty),
-            'current_qty': str(current_qty),
-            'image_url': data['image_url'],
-            'price': data['price']
-        })
-
-    try:
-        print(f"Записуємо {len(rows)} рядків у {csv_file}")
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"Успішно записано в {csv_file}")
-    except IOError as e:
-        print(f"Помилка запису в CSV-файл {csv_file}: {e}")
-
-def process_data(collection_name):
-    try:
-        results = fetch_data_from_api(collection_name)
-        if not results:
-            print("Не отримано даних з API, створюємо порожній CSV")
-            update_csv({'car_name': '', 'SKU': '', 'page_name': '', 'current_qty': None, 'image_url': '', 'price': ''})
-            return
-
-        data_list = process_api_results(results)
-
-        data_updated = update_products_qty(data_list)
-
-        for data in data_updated:
-            update_csv(data)
-    except Exception as e:
-        print(f"Виникла помилка під час обробки даних: {e}")
-        raise
-
-
-def get_token_with_playwright():
-    browser = None
-    try:
-        with sync_playwright() as p:
-            print("Запуск Chromium...")
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--window-size=1920,1080',
-                    '--disable-blink-features=AutomationControlled'
-                ]
-            )
-
-            context = browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-                bypass_csp=True
-            )
-
-            # Приховуємо автоматизацію
-            context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                window.chrome = { runtime: {}, app: {}, loadTimes: () => {} };
-                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-            """)
-
-            page = context.new_page()
-            token = None
-
-            def intercept(route, request):
-                nonlocal token
-                if 'mattel-checkout-prd.fly.dev/api/product-inventory' in request.url:
-                    auth = request.headers.get('authorization') or request.headers.get('Authorization')
-                    if auth and auth.startswith('Bearer '):
-                        token = auth
-                        print(f"ТОКЕН ЗНАЙДЕНО: {auth[:70]}...")
-                route.continue_()
-
-            page.route('**/*', intercept)
-
-            print("Перехід на checkout URL...")
-            page.goto(
-                'https://creations.mattel.com/checkouts/cn/hWN4eQSmROJAn1IYF6ZTjU27/en-us?auto_redirect=false&edge_redirect=true&skip_shop_pay=true',
-                timeout=60000
-            )
-
-            print("Чекаємо до 20 сек на завантаження (без networkidle)...")
-            page.wait_for_timeout(5000)  # Дозволяємо завантажитись
-
-            # Чекаємо токен до 20 сек
-            start = time.time()
-            while not token and time.time() - start < 20:
-                page.wait_for_timeout(1000)
-                print(f"Чекаємо токен... ({int(time.time() - start)} сек)")
-
-            # Повертаємо токен, навіть якщо сторінка не "networkidle"
-            if token:
-                print("ТОКЕН УСПІШНО ОТРИМАНО!")
-                return token
-            else:
-                print("Токен не знайдено за 20 сек.")
-                return None
-
-    except Exception as e:
-        print("Playwright помилка:", str(e))
-        return None
-    finally:
-        # Безпечне завершення Playwright
-        if browser:
-            try:
-                # Спробуємо прибрати маршрути перед закриттям
-                try:
-                    for context in browser.contexts:
-                        for page in context.pages:
-                            try:
-                                page.unroute('**/*')
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+                # Чекаємо токен
+                start_time = time.time()
+                while not token and (time.time() - start_time) < TOKEN_WAIT_TIMEOUT:
+                    page.wait_for_timeout(1000)
 
                 browser.close()
-                print("Браузер закрито без помилок.")
-            except Exception as e:
-                # Ігноруємо типові помилки закриття
-                if "TargetClosedError" in str(e) or "CancelledError" in str(e):
-                    print("⚠️ Попередження: браузер уже був закритий (ігноруємо).")
-                else:
-                    print(f"⚠️ Помилка при закритті браузера: {e}")
+                return token
+
+        except Exception as e:
+            print(f"❌ Помилка Playwright: {e}")
+            return None
 
 
-def get_item_details(token, product_id):
+def get_item_inventory(token: str, product_id: str) -> Tuple[int, int, bool]:
+    """
+    Отримує інформацію про інвентар продукту.
 
-    if product_id == '9083040727245':
-        print("")
-
-    url = "https://mattel-checkout-prd.fly.dev/api/product-inventory"
-
-    querystring = {
-        "productIds": f"gid://shopify/Product/{product_id}"
-    }
-
+    Returns:
+        (max_qty, current_qty, success)
+    """
     headers = {
         "Authorization": token,
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Origin": "https://extensions.shopifycdn.com",
         "Referer": "https://extensions.shopifycdn.com/",
     }
 
-    try:
-        resp = requests.get(url, headers=headers, params=querystring, timeout=15)
-    except Exception as e:
-        print(f"HTTP request failed for id={product_id}: {e}")
-        return 0, 0, False
-
-    if resp.status_code != 200:
-        print(f"Non-200 response ({resp.status_code}) for id={product_id}")
-        return 0, 0, False
+    params = {"productIds": f"gid://shopify/Product/{product_id}"}
 
     try:
+        resp = requests.get(INVENTORY_API_URL, headers=headers, params=params, timeout=15)
+        resp.raise_for_status()
         data = resp.json()
-    except json.JSONDecodeError:
-        print(f"Response is not valid JSON for id={product_id}")
+    except requests.HTTPError as e:
+        # Пробрасываем HTTPError наверх для обработки 401
+        raise
+    except Exception as e:
+        print(f"⚠️ Помилка запиту для {product_id}: {e}")
         return 0, 0, False
 
     if not data or not isinstance(data, list) or len(data) == 0:
-        return 0, 0, False
+        return 0, 0, True  # Порожній інвентар - це не помилка
 
     item = data[0]
     total_inventory = item.get("totalInventory", 0) or 0
 
-    # === Обробка variantMeta ===
+    # Обробка variantMeta
     variant_meta = item.get("variantMeta")
     if not variant_meta or not variant_meta.get("value"):
         return int(total_inventory), 0, True
 
-    value = variant_meta["value"]
-
-    # Спроба розпарсити JSON
     try:
-        parsed = json.loads(value)
-    except (TypeError, json.JSONDecodeError):
+        parsed = json.loads(variant_meta["value"])
+        if not parsed or not isinstance(parsed, list):
+            return int(total_inventory), 0, True
+
+        variant_inventory = parsed[0].get("variant_inventory", [])
+    except (TypeError, json.JSONDecodeError, IndexError, KeyError):
         return int(total_inventory), 0, True
 
-    if not parsed or not isinstance(parsed, list) or len(parsed) == 0:
-        return int(total_inventory), 0, True
-
-    first_variant = parsed[0]
-    variant_inventory = first_variant.get("variant_inventory", [])
-
-    if not variant_inventory or not isinstance(variant_inventory, list):
-        return int(total_inventory), 0, True
-
-    # === ЛОГІКА ВИБОРУ qty ===
-    available_qty = None
-    backordered_qty = None
-
+    # Пріоритет: Available → Backordered → 0
     for entry in variant_inventory:
-        status = entry.get("variant_inventorystatus")
-        qty = entry.get("variant_qty", 0) or 0
+        if entry.get("variant_inventorystatus") == "Available":
+            qty = entry.get("variant_qty", 0) or 0
+            return int(total_inventory), int(qty), True
 
-        if status == "Available":
-            available_qty = qty
-        elif status == "Backordered" and backordered_qty is None:
-            backordered_qty = qty  # беремо перший Backordered
+    # Якщо немає Available, шукаємо Backordered
+    for entry in variant_inventory:
+        if entry.get("variant_inventorystatus") == "Backordered":
+            qty = entry.get("variant_qty", 0) or 0
+            return int(total_inventory), int(qty), True
 
-    # 1. Якщо є "Available" → повертаємо його
-    if available_qty is not None:
-        return int(total_inventory), int(available_qty), True
-
-    # 2. Якщо немає "Available", але є "Backordered" → повертаємо його qty
-    if backordered_qty is not None:
-        return int(total_inventory), int(backordered_qty), True
-
-    # 3. Якщо нічого немає → повертаємо 0
     return int(total_inventory), 0, True
 
 
-def update_products_qty(data_list, token):
+def update_products_qty(products: List[Product], token_manager: TokenManager) -> List[Product]:
+    """Оновлює кількість для кожного продукту."""
+    token = token_manager.get_token()
     if not token:
-        print("❌ Токен не отримано, пропускаємо оновлення.")
-        return data_list
+        print("❌ Токен відсутній, пропускаємо оновлення")
+        return products
 
-    for data in data_list:
-        print(f"Updating details for - {data['car_name']}")
-        item_id = data.get('uid', '')
+    failed_products = []  # Продукти, які не вдалося оновити
 
-        if not item_id:
-            data['max_qty'] = 0
-            data['current_qty'] = 0
+    for i, product in enumerate(products, 1):
+        if not product.uid:
+            print(f"⏭️ [{i}/{len(products)}] Пропущено {product.car_name[:40]}: немає UID")
             continue
+
+        print(f"🔄 [{i}/{len(products)}] {product.car_name[:50]}...")
+
+        # Перевіряємо токен перед кожним запитом (якщо минуло багато часу)
+        if not token_manager.is_token_valid():
+            print("⏰ Токен застарів, оновлюємо превентивно...")
+            token = token_manager.get_token(force_refresh=True)
+            if not token:
+                print("❌ Не вдалося оновити токен, припиняємо обробку")
+                break
 
         try:
-            qty, total, updated = get_item_details(token, item_id)
+            max_qty, current_qty, success = get_item_inventory(token, product.uid)
 
-            if not updated:
-                continue
-
-            # Якщо повертає 0, 0 — не обов'язково помилка, може бути порожній stock
-            data['max_qty'] = total
-            data['current_qty'] = qty
+            if success:
+                product.max_qty = max_qty
+                product.current_qty = current_qty
 
         except requests.exceptions.HTTPError as e:
-            # Якщо 401 — пробуємо отримати новий токен
             if e.response.status_code == 401:
-                print("⚠️ Токен недійсний, пробуємо оновити...")
-                token = get_token_with_playwright()
+                print("🔄 401 Unauthorized - токен недійсний, оновлюємо...")
+                token = token_manager.get_token(force_refresh=True)
+
                 if token:
                     try:
-                        qty, total, updated = get_item_details(token, item_id)
-                        if not updated:
-                            continue
-                        data['max_qty'] = total
-                        data['current_qty'] = qty
-                    except Exception as e:
-                        print(f"❌ Не вдалося повторно оновити {item_id}: {e}")
-                        continue
+                        max_qty, current_qty, success = get_item_inventory(token, product.uid)
+                        if success:
+                            product.max_qty = max_qty
+                            product.current_qty = current_qty
+                        else:
+                            failed_products.append(product.car_name)
+                    except Exception as retry_e:
+                        print(f"❌ Повторна спроба невдала: {retry_e}")
+                        failed_products.append(product.car_name)
                 else:
-                    print("❌ Не вдалося оновити токен.")
-                    continue
+                    print("❌ Не вдалося оновити токен, припиняємо")
+                    failed_products.extend([p.car_name for p in products[i - 1:]])
+                    break
             else:
-                print(f"❌ HTTP помилка для {item_id}: {e}")
-                continue
+                print(f"❌ HTTP {e.response.status_code} для {product.uid}")
+                failed_products.append(product.car_name)
+
         except Exception as e:
-            print(f"⚠️ Помилка при оновленні {item_id}: {e}")
+            print(f"⚠️ Несподівана помилка для {product.uid}: {e}")
+            failed_products.append(product.car_name)
+
+    if failed_products:
+        print(f"\n⚠️ Не вдалося оновити {len(failed_products)} продуктів:")
+        for name in failed_products[:5]:  # Показуємо перші 5
+            print(f"  - {name[:60]}")
+        if len(failed_products) > 5:
+            print(f"  ... та ще {len(failed_products) - 5}")
+
+    return products
+
+
+class CSVManager:
+    """Клас для роботи з CSV файлом."""
+
+    def __init__(self, csv_file: str = 'output.csv'):
+        self.csv_file = csv_file
+        self._cache: Optional[List[Product]] = None
+
+    def remove_duplicates(self) -> int:
+        """Видаляє дублікати з CSV файлу. Повертає кількість видалених дублікатів."""
+        products = self._load_cache()
+        original_count = len(products)
+
+        # Використовуємо словник для відстеження унікальних продуктів
+        # Ключ: (page_name, car_name, SKU)
+        unique_products = {}
+
+        for product in products:
+            key = (product.page_name, product.car_name, product.SKU)
+
+            if key in unique_products:
+                existing = unique_products[key]
+
+                # При дублікатах:
+                # - current_qty: беремо МЕНШЕ (товари розкуповують)
+                # - max_qty: беремо БІЛЬШЕ (максимальна кількість, що була)
+                # - image_url, price: беремо непорожні
+
+                merged = Product(
+                    car_name=product.car_name,
+                    SKU=product.SKU,
+                    page_name=product.page_name,
+                    image_url=existing.image_url or product.image_url,
+                    price=existing.price or product.price,
+                    uid=product.uid or existing.uid,
+                    max_qty=max(existing.max_qty, product.max_qty),
+                    current_qty=min(existing.current_qty,
+                                    product.current_qty) if existing.current_qty > 0 and product.current_qty > 0 else max(
+                        existing.current_qty, product.current_qty)
+                )
+
+                unique_products[key] = merged
+            else:
+                unique_products[key] = product
+
+        # Оновлюємо кеш унікальними продуктами
+        self._cache = list(unique_products.values())
+        duplicates_removed = original_count - len(self._cache)
+
+        if duplicates_removed > 0:
+            print(f"🧹 Видалено {duplicates_removed} дублікатів ({original_count} → {len(self._cache)})")
+
+        return duplicates_removed
+
+    def _load_cache(self) -> List[Product]:
+        """Завантажує існуючі дані з CSV у пам'ять."""
+        if self._cache is not None:
+            return self._cache
+
+        products = []
+
+        if os.path.exists(self.csv_file) and os.path.getsize(self.csv_file) > 0:
+            try:
+                with open(self.csv_file, 'r', newline='', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        products.append(Product(
+                            car_name=row.get('car_name', ''),
+                            SKU=row.get('SKU', ''),
+                            page_name=row.get('page_name', ''),
+                            image_url=row.get('image_url', ''),
+                            price=row.get('price', ''),
+                            uid='',  # UID не зберігається в CSV
+                            max_qty=int(row.get('max_qty', 0) or 0),
+                            current_qty=int(row.get('current_qty', 0) or 0)
+                        ))
+            except Exception as e:
+                print(f"⚠️ Помилка читання CSV: {e}")
+
+        self._cache = products
+        return products
+
+    def update_or_add(self, new_product: Product) -> None:
+        """Оновлює існуючий продукт або додає новий."""
+        if new_product.current_qty is None:
+            return
+
+        existing_products = self._load_cache()
+        found = False
+
+        for existing in existing_products:
+            if existing.matches(new_product):
+                old_qty = existing.current_qty
+                old_max = existing.max_qty
+
+                # Оновлюємо дані
+                existing.current_qty = new_product.current_qty
+                existing.max_qty = new_product.max_qty
+
+                # Оновлюємо тільки якщо порожні
+                if not existing.image_url:
+                    existing.image_url = new_product.image_url
+                if not existing.price:
+                    existing.price = new_product.price
+
+                # Логуємо тільки реальні зміни
+                if old_qty != new_product.current_qty or old_max != new_product.max_qty:
+                    print(
+                        f"📝 Оновлено {new_product.car_name[:40]}: qty {old_qty}→{new_product.current_qty}, max {old_max}→{new_product.max_qty}")
+
+                found = True
+                break
+
+        if not found:
+            print(f"➕ Новий: {new_product.car_name[:40]}")
+            existing_products.append(new_product)
+
+    def save(self) -> None:
+        """Зберігає всі дані в CSV файл."""
+        if self._cache is None:
+            return
+
+        try:
+            with open(self.csv_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
+                writer.writeheader()
+                writer.writerows([p.to_csv_dict() for p in self._cache])
+            print(f"💾 Збережено {len(self._cache)} записів у {self.csv_file}")
+        except IOError as e:
+            print(f"❌ Помилка запису в CSV: {e}")
+
+
+def main():
+    """Основна функція обробки всіх колекцій."""
+    print("🚀 Початок обробки колекцій Mattel\n")
+
+    token_manager = TokenManager()
+    csv_manager = CSVManager()
+
+    # Очищаємо дублікати перед початком
+    csv_manager.remove_duplicates()
+    csv_manager.save()
+
+    for collection in COLLECTIONS:
+        print(f"\n{'=' * 60}")
+        print(f"📦 Колекція: {collection}")
+        print('=' * 60)
+
+        try:
+            # Отримання даних з API
+            results = fetch_data_from_api(collection)
+            if not results:
+                print("⚠️ Немає результатів, пропускаємо колекцію")
+                continue
+
+            # Обробка результатів
+            products = process_api_results(results)
+            if not products:
+                print("⚠️ Немає продуктів після фільтрації")
+                continue
+
+            # Оновлення кількості
+            products = update_products_qty(products, token_manager)
+
+            # Збереження в CSV (batch update)
+            for product in products:
+                csv_manager.update_or_add(product)
+
+            csv_manager.save()
+            print(f"✅ Колекція оброблена")
+
+        except Exception as e:
+            print(f"❌ Помилка: {e}")
             continue
 
-    return data_list
+    print("\n🎉 Обробка завершена!")
 
 
 if __name__ == "__main__":
-    collections = ['hot-wheels-collectors|hot-wheels-collectors',
-                   'hot-wheels-collectors|hot-wheels-f1-collector-vehicles',
-                   'matchbox-collectors|matchbox-collectors',
-                   'mattel-creations|mattel-creations']
-
-    token = get_token_with_playwright()
-
-    for item in collections:
-        try:
-            results = fetch_data_from_api(item)
-            data_list = process_api_results(results)
-
-            # Передаємо поточний токен у функцію
-            updated_data = update_products_qty(data_list, token)
-
-            # Оновлюємо CSV
-            for data in updated_data:
-                update_csv(data)
-        except Exception as e:
-            print(f"❌ Помилка при обробці колекції {item}: {e}")
+    main()
