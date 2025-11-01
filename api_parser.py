@@ -406,9 +406,14 @@ class CSVManager:
                 existing = unique_products[key]
 
                 # При дублікатах:
-                # - current_qty: беремо МЕНШЕ (товари розкуповують)
+                # - current_qty: беремо МЕНШЕ (товари розкуповують), але мінімум 0
                 # - max_qty: беремо БІЛЬШЕ (максимальна кількість, що була)
                 # - image_url, price: беремо непорожні
+
+                merged_current_qty = min(existing.current_qty, product.current_qty)
+                # Якщо кількість від'ємна - ставимо 0
+                if merged_current_qty < 0:
+                    merged_current_qty = 0
 
                 merged = Product(
                     car_name=product.car_name,
@@ -418,13 +423,14 @@ class CSVManager:
                     price=existing.price or product.price,
                     uid=product.uid or existing.uid,
                     max_qty=max(existing.max_qty, product.max_qty),
-                    current_qty=min(existing.current_qty,
-                                    product.current_qty) if existing.current_qty > 0 and product.current_qty > 0 else max(
-                        existing.current_qty, product.current_qty)
+                    current_qty=merged_current_qty
                 )
 
                 unique_products[key] = merged
             else:
+                # Нормалізуємо й для нових продуктів
+                if product.current_qty < 0:
+                    product.current_qty = 0
                 unique_products[key] = product
 
         # Оновлюємо кеш унікальними продуктами
