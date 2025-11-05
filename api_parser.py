@@ -325,14 +325,21 @@ def get_item_inventory(token: str, product_id: str) -> Tuple[int, int, bool]:
     return max_qty, int(total_inventory), True
 
 
-def update_products_qty(products: List[Product], token_manager: TokenManager) -> List[Product]:
-    """Оновлює кількість для кожного продукту."""
+def update_products_qty(products: List[Product], token_manager: TokenManager) -> Tuple[List[Product], bool]:
+    """
+    Оновлює кількість для кожного продукту.
+    Повертає (оновлений_список, success_flag)
+    success_flag = False, якщо були проблеми (наприклад, 500-помилки).
+    """
     token = token_manager.get_token()
     if not token:
         print("❌ Токен відсутній, пропускаємо оновлення")
-        return products
+        return products, False
 
-    failed_products = []  # Продукти, які не вдалося оновити
+    failed_products = []
+    consecutive_500_errors = 0
+    MAX_500_ERRORS = 3
+    had_server_errors = False
 
     for i, product in enumerate(products, 1):
         if not product.uid:
@@ -341,30 +348,33 @@ def update_products_qty(products: List[Product], token_manager: TokenManager) ->
 
         print(f"🔄 [{i}/{len(products)}] {product.car_name[:50]}...")
 
-        # Перевіряємо токен перед кожним запитом (якщо минуло багато часу)
+        # Перевірка дійсності токена
         if not token_manager.is_token_valid():
             print("⏰ Токен застарів, оновлюємо превентивно...")
             token = token_manager.get_token(force_refresh=True)
             if not token:
                 print("❌ Не вдалося оновити токен, припиняємо обробку")
+                had_server_errors = True
                 break
 
         try:
             max_qty, current_qty, success = get_item_inventory(token, product.uid)
-
             if success:
+                consecutive_500_errors = 0
                 product.max_qty = max_qty
                 product.current_qty = current_qty
 
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                print("🔄 401 Unauthorized - токен недійсний, оновлюємо...")
-                token = token_manager.get_token(force_refresh=True)
+            status = e.response.status_code
 
+            if status == 401:
+                print("🔄 401 Unauthorized - оновлюємо токен...")
+                token = token_manager.get_token(force_refresh=True)
                 if token:
                     try:
                         max_qty, current_qty, success = get_item_inventory(token, product.uid)
                         if success:
+                            consecutive_500_errors = 0
                             product.max_qty = max_qty
                             product.current_qty = current_qty
                         else:
@@ -374,24 +384,38 @@ def update_products_qty(products: List[Product], token_manager: TokenManager) ->
                         failed_products.append(product.car_name)
                 else:
                     print("❌ Не вдалося оновити токен, припиняємо")
-                    failed_products.extend([p.car_name for p in products[i - 1:]])
+                    had_server_errors = True
                     break
+
+            elif status == 500:
+                consecutive_500_errors += 1
+                had_server_errors = True
+                print(f"⚠️ HTTP 500 для {product.uid} ({consecutive_500_errors}/{MAX_500_ERRORS})")
+
+                if consecutive_500_errors >= MAX_500_ERRORS:
+                    print("\n⚠️ Надто багато помилок 500 — здається, API Mattel не працює стабільно.")
+                    print("⛔ Припиняємо оновлення кількості та не будемо змінювати CSV.")
+                    return products, False  # припиняємо одразу
+                continue  # не оновлюємо кількість після 500
+
             else:
-                print(f"❌ HTTP {e.response.status_code} для {product.uid}")
+                consecutive_500_errors = 0
                 failed_products.append(product.car_name)
+                print(f"❌ HTTP {status} для {product.uid}")
 
         except Exception as e:
-            print(f"⚠️ Несподівана помилка для {product.uid}: {e}")
+            consecutive_500_errors = 0
             failed_products.append(product.car_name)
+            print(f"⚠️ Несподівана помилка для {product.uid}: {e}")
 
     if failed_products:
-        print(f"\n⚠️ Не вдалося оновити {len(failed_products)} продуктів:")
-        for name in failed_products[:5]:  # Показуємо перші 5
+        print(f"\n⚠️ Не вдалося оновити {len(failed_products)} продуктів.")
+        for name in failed_products[:5]:
             print(f"  - {name[:60]}")
         if len(failed_products) > 5:
             print(f"  ... та ще {len(failed_products) - 5}")
 
-    return products
+    return products, not had_server_errors
 
 
 class CSVManager:
@@ -574,9 +598,13 @@ def main():
                 continue
 
             # Оновлення кількості
-            products = update_products_qty(products, token_manager)
+            products, success = update_products_qty(products, token_manager)
 
-            # Збереження в CSV (batch update)
+            if not success:
+                print("⚠️ Пропускаємо оновлення CSV через проблеми з API (500 або інші).")
+                continue  # переходимо до наступної колекції
+
+            # Якщо все ок — зберігаємо зміни
             for product in products:
                 csv_manager.update_or_add(product)
 
